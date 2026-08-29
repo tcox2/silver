@@ -139,6 +139,13 @@ final class DisplayModeController {
 
     private func exactCadence(_ refreshRate: Double, frameRate: Double) -> Bool {
         guard refreshRate > 0 else { return false }
+        // CTA's 24p family covers both 24 and 24000/1001. This HDMI chain
+        // exposes integer 24 through CoreGraphics, and mpv display-resample
+        // performs the approximately 0.1% synchronization during playback.
+        if abs(refreshRate - 24.0) < 0.01,
+           abs(frameRate - (24_000.0 / 1_001.0)) < 0.01 {
+            return true
+        }
         let ratio = refreshRate / frameRate
         let multiplier = ratio.rounded()
         guard multiplier >= 1 else { return false }

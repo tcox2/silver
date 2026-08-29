@@ -148,6 +148,11 @@ final class AppModel: ObservableObject {
             stop()
             throw DisplayModeError.displayGrabLost
         }
+        guard let outputRefreshRate = currentDisplayOutput()?.refreshRate else {
+            stop()
+            throw MPVError.displaySynchronization
+        }
+        try mpv.configureDisplaySync(refreshRate: outputRefreshRate)
         try mpv.load(url)
         if let subtitle, let subtitleURL {
             var attached = false
@@ -172,6 +177,8 @@ final class AppModel: ObservableObject {
         playbackDiagnosticsTask?.cancel()
         playbackDiagnosticsTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
+            var diagnosticPass = 0
+            var synchronizationVerified = false
             while !Task.isCancelled, let self, self.hasPlayback {
                 let videoFormat = self.mpv.string("video-format")
                 let videoCodec = self.mpv.string("video-codec")
@@ -193,13 +200,31 @@ final class AppModel: ObservableObject {
                     "pausedForCache=\(self.mpv.string("paused-for-cache") ?? "nil") " +
                     "cacheDuration=\(self.mpv.string("demuxer-cache-duration") ?? "nil") " +
                     "cacheSpeed=\(self.mpv.string("cache-speed") ?? "nil") " +
-                    "cacheIdle=\(self.mpv.string("demuxer-cache-idle") ?? "nil")"
+                    "cacheIdle=\(self.mpv.string("demuxer-cache-idle") ?? "nil") " +
+                    "videoSync=\(self.mpv.string("video-sync") ?? "nil") " +
+                    "displaySyncActive=\(self.mpv.string("display-sync-active") ?? "nil") " +
+                    "estimatedDisplayFPS=\(self.mpv.string("estimated-display-fps") ?? "nil") " +
+                    "videoSpeedCorrection=\(self.mpv.string("video-speed-correction") ?? "nil") " +
+                    "audioSpeedCorrection=\(self.mpv.string("audio-speed-correction") ?? "nil")"
                 )
                 if voConfigured != "yes" || videoFormat == nil {
                     SilverLog.error("Playback stopped because decoded video output was not established")
                     self.stop()
                     return
                 }
+                if !synchronizationVerified, diagnosticPass >= 1 {
+                    guard let sourceFrameRate = video.averageFrameRate,
+                          self.mpv.verifyDisplaySynchronization(
+                            sourceFrameRate: sourceFrameRate,
+                            outputRefreshRate: outputRefreshRate
+                          ) else {
+                        SilverLog.error("Playback stopped because display-clock synchronization verification failed")
+                        self.stop()
+                        return
+                    }
+                    synchronizationVerified = true
+                }
+                diagnosticPass += 1
                 try? await Task.sleep(for: .seconds(10))
             }
         }

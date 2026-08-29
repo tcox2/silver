@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import QuartzCore
 
 @MainActor
 final class MPVController {
@@ -14,6 +15,8 @@ final class MPVController {
     private typealias WaitEvent = @convention(c) (OpaquePointer?, Double) -> UnsafeRawPointer?
     private typealias RenderCreate = @convention(c) (UnsafeMutableRawPointer?, OpaquePointer?, UnsafeMutableRawPointer?) -> Int32
     private typealias RenderFrame = @convention(c) (OpaquePointer?, UnsafeMutableRawPointer?) -> Void
+    private typealias RenderUpdate = @convention(c) (OpaquePointer?) -> UInt64
+    private typealias RenderReportSwap = @convention(c) (OpaquePointer?) -> Void
     private typealias RenderSetUpdate = @convention(c) (OpaquePointer?, (@convention(c) (UnsafeMutableRawPointer?) -> Void)?, UnsafeMutableRawPointer?) -> Void
     private typealias RenderFree = @convention(c) (OpaquePointer?) -> Void
 
@@ -23,6 +26,8 @@ final class MPVController {
     private var attached = false
     private var eventLoopRunning = false
     private var renderContext: OpaquePointer?
+    private var renderUpdate: RenderUpdate?
+    private var renderReportSwap: RenderReportSwap?
     private weak var renderView: MPVOpenGLView?
     private(set) var attachmentError: Error?
 
@@ -57,13 +62,17 @@ final class MPVController {
         try option("sid", "auto")
         try option("keep-open", "yes")
         try option("terminal", "no")
+        // Synchronize fractional cinema material to the verified integer HDMI
+        // display clock. Audio is resampled by mpv to preserve A/V alignment.
+        try option("video-sync", "display-resample")
+        try option("video-sync-max-video-change", "1")
         let initialize: Initialize = try symbol("mpv_initialize")
         guard initialize(handle) >= 0 else { throw MPVError.initialization }
         try createRenderContext(for: view)
         startEventLogging()
         attached = true
         attachmentError = nil
-        SilverLog.info("Media runtime initialized with embedded OpenGL render context decoderThreads=16 decoderQueueFrames=12 decoderQueueBytes=256MiB decoderQueueSeconds=1")
+        SilverLog.info("Media runtime initialized with embedded OpenGL render context, decoder queue, and display-resample synchronization")
         if let pendingURL {
             do { try load(pendingURL); self.pendingURL = nil }
             catch {
@@ -97,6 +106,11 @@ final class MPVController {
     func stop() { try? command(["stop"]) }
     func setPaused(_ paused: Bool) throws {
         try command(["set", "pause", paused ? "yes" : "no"])
+    }
+    func configureDisplaySync(refreshRate: Double) throws {
+        guard refreshRate.isFinite, refreshRate > 0 else { throw MPVError.displaySynchronization }
+        try command(["set", "display-fps-override", String(format: "%.9f", refreshRate)])
+        SilverLog.info("mpv display clock override configured refreshRate=\(String(format: "%.9f", refreshRate))")
     }
     func seek(to seconds: Double) { try? command(["seek", String(seconds), "absolute+exact"]) }
     func string(_ name: String) -> String? {
@@ -185,27 +199,60 @@ final class MPVController {
         guard result >= 0,
               let context else { throw MPVError.renderContext }
         renderContext = context
+        renderUpdate = try symbol("mpv_render_context_update")
+        renderReportSwap = try symbol("mpv_render_context_report_swap")
         renderView = view
         view.controller = self
         let setUpdate: RenderSetUpdate = try symbol("mpv_render_context_set_update_callback")
         setUpdate(context, silverMPVRenderUpdate, Unmanaged.passUnretained(view).toOpaque())
     }
 
-    func render(width: Int32, height: Int32) {
+    func renderForDisplaySwap(width: Int32, height: Int32) {
         guard let context = renderContext, let library else { return }
+        _ = renderUpdate?(context)
         var fbo = MPVOpenGLFBO(fbo: 0, width: width, height: height, internalFormat: 0)
         var flip: Int32 = 1
+        var blockForTargetTime: Int32 = 0
         var params: [MPVRenderParam] = withUnsafeMutablePointer(to: &fbo) { fboPointer in
             withUnsafeMutablePointer(to: &flip) { flipPointer in
-                [
-                    MPVRenderParam(type: 3, data: UnsafeMutableRawPointer(fboPointer)),
-                    MPVRenderParam(type: 4, data: UnsafeMutableRawPointer(flipPointer)),
-                    MPVRenderParam(type: 0, data: nil)
-                ]
+                withUnsafeMutablePointer(to: &blockForTargetTime) { timingPointer in
+                    [
+                        MPVRenderParam(type: 3, data: UnsafeMutableRawPointer(fboPointer)),
+                        MPVRenderParam(type: 4, data: UnsafeMutableRawPointer(flipPointer)),
+                        MPVRenderParam(type: 12, data: UnsafeMutableRawPointer(timingPointer)),
+                        MPVRenderParam(type: 0, data: nil)
+                    ]
+                }
             }
         }
         let render = unsafeBitCast(dlsym(library, "mpv_render_context_render"), to: RenderFrame.self)
         params.withUnsafeMutableBufferPointer { render(context, UnsafeMutableRawPointer($0.baseAddress)) }
+    }
+
+    func reportDisplaySwap() {
+        guard let context = renderContext else { return }
+        renderReportSwap?(context)
+    }
+
+    func verifyDisplaySynchronization(sourceFrameRate: Double, outputRefreshRate: Double) -> Bool {
+        let expectedCorrection = outputRefreshRate / sourceFrameRate
+        let actualCorrection = number("video-speed-correction")
+        let estimatedFPS = number("estimated-display-fps")
+        let measuredFPS = renderView?.measuredRefreshRate
+        let active = string("display-sync-active") == "yes"
+        let correctionOK = actualCorrection.map { abs($0 - expectedCorrection) < 0.00035 } ?? false
+        let estimatedOK = estimatedFPS.map { abs($0 - outputRefreshRate) < 0.05 } ?? false
+        let measuredOK = measuredFPS.map { abs($0 - outputRefreshRate) < 0.05 } ?? false
+        SilverLog.info(
+            "Display synchronization verification active=\(active) " +
+            "sourceFPS=\(String(format: "%.9f", sourceFrameRate)) " +
+            "outputFPS=\(String(format: "%.9f", outputRefreshRate)) " +
+            "measuredFPS=\(measuredFPS.map { String(format: "%.9f", $0) } ?? "nil") " +
+            "estimatedFPS=\(estimatedFPS.map { String(format: "%.9f", $0) } ?? "nil") " +
+            "expectedCorrection=\(String(format: "%.9f", expectedCorrection)) " +
+            "actualCorrection=\(actualCorrection.map { String(format: "%.9f", $0) } ?? "nil")"
+        )
+        return active && correctionOK && estimatedOK && measuredOK
     }
 
     deinit {
@@ -261,12 +308,19 @@ private let silverGLProcAddress: @convention(c) (UnsafeMutableRawPointer?, Unsaf
 private let silverMPVRenderUpdate: @convention(c) (UnsafeMutableRawPointer?) -> Void = { context in
     guard let context else { return }
     let view = Unmanaged<MPVOpenGLView>.fromOpaque(context).takeUnretainedValue()
-    DispatchQueue.main.async { view.needsDisplay = true }
+    DispatchQueue.main.async { view.hasPendingMPVUpdate = true }
 }
 
 @MainActor
 final class MPVOpenGLView: NSOpenGLView {
     weak var controller: MPVController?
+    fileprivate var hasPendingMPVUpdate = true
+    private var displayLink: CADisplayLink?
+    private var previousDisplayTimestamp: CFTimeInterval?
+    private var displayIntervals: [CFTimeInterval] = []
+    private var cadenceWindowsSinceLog = 0
+    private var hasLoggedCadence = false
+    private(set) var measuredRefreshRate: Double?
 
     init() {
         let attributes: [NSOpenGLPixelFormatAttribute] = [
@@ -281,17 +335,63 @@ final class MPVOpenGLView: NSOpenGLView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard bounds.width > 0, bounds.height > 0 else { return }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        displayLink?.invalidate()
+        displayLink = nil
+        previousDisplayTimestamp = nil
+        displayIntervals.removeAll(keepingCapacity: true)
+        cadenceWindowsSinceLog = 0
+        hasLoggedCadence = false
+        measuredRefreshRate = nil
+        guard window != nil else { return }
+        let link = displayLink(target: self, selector: #selector(displayLinkFired(_:)))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+        SilverLog.info("Display-bound CADisplayLink attached to mpv render surface")
+    }
+
+    @objc private func displayLinkFired(_ link: CADisplayLink) {
+        if let previousDisplayTimestamp {
+            let interval = link.timestamp - previousDisplayTimestamp
+            if interval > 0, interval < 0.2 {
+                displayIntervals.append(interval)
+                if displayIntervals.count >= 120 {
+                    let sorted = displayIntervals.sorted()
+                    measuredRefreshRate = 1.0 / sorted[sorted.count / 2]
+                    displayIntervals.removeAll(keepingCapacity: true)
+                    cadenceWindowsSinceLog += 1
+                    if !hasLoggedCadence || cadenceWindowsSinceLog >= 12 {
+                        SilverLog.info("Display-link cadence measured refreshRate=\(String(format: "%.9f", measuredRefreshRate!))")
+                        hasLoggedCadence = true
+                        cadenceWindowsSinceLog = 0
+                    }
+                }
+            }
+        }
+        previousDisplayTimestamp = link.timestamp
+        drawAtDisplaySwap()
+    }
+
+    private func drawAtDisplaySwap() {
+        guard bounds.width > 0, bounds.height > 0, let controller else { return }
         openGLContext?.makeCurrentContext()
         let scale = window?.backingScaleFactor ?? 1
-        controller?.render(width: Int32(bounds.width * scale), height: Int32(bounds.height * scale))
+        controller.renderForDisplaySwap(width: Int32(bounds.width * scale), height: Int32(bounds.height * scale))
         openGLContext?.flushBuffer()
+        controller.reportDisplaySwap()
+        hasPendingMPVUpdate = false
     }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // The display-bound CADisplayLink owns all presentation and swap reports.
+    }
+
+    deinit { displayLink?.invalidate() }
 }
 
 enum MPVError: LocalizedError {
-    case unavailable(String), initialization, renderContext, command, option(String)
+    case unavailable(String), initialization, renderContext, command, option(String), displaySynchronization
     var errorDescription: String? {
         switch self {
         case let .unavailable(detail): "The bundled media runtime is unavailable: \(detail)"
@@ -299,6 +399,7 @@ enum MPVError: LocalizedError {
         case .renderContext: "The playback engine could not create its OpenGL render context."
         case .command: "The playback engine rejected a command."
         case let .option(name): "The playback engine rejected option \(name)."
+        case .displaySynchronization: "Playback stopped because mpv could not synchronize to the verified display clock."
         }
     }
 }
