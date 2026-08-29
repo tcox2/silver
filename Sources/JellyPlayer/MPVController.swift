@@ -120,7 +120,7 @@ final class MPVController {
     private func startEventLogging() {
         guard let handle, let library, !eventLoopRunning else { return }
         let request = unsafeBitCast(dlsym(library, "mpv_request_log_messages"), to: RequestLogMessages.self)
-        _ = "debug".withCString { request(handle, $0) }
+        _ = "warn".withCString { request(handle, $0) }
         let wait = unsafeBitCast(dlsym(library, "mpv_wait_event"), to: WaitEvent.self)
         eventLoopRunning = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
