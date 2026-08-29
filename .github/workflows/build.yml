@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Build Silver
         shell: zsh {0}
@@ -46,7 +46,7 @@ jobs:
           shasum -a 256 Silver-macos-arm64.zip > Silver-macos-arm64.zip.sha256
 
       - name: Upload Silver
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Silver-macos-arm64
           path: |
