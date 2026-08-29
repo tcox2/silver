@@ -28,18 +28,28 @@ struct JellyfinClient: Sendable {
         return try await send(request, as: JellyfinSession.self)
     }
 
-    func latestItems(userID: String) async throws -> [MediaItem] {
-        let query = [
-            URLQueryItem(name: "UserId", value: userID),
-            URLQueryItem(name: "IncludeItemTypes", value: "Movie,Episode"),
-            URLQueryItem(name: "Recursive", value: "true"),
-            URLQueryItem(name: "SortBy", value: "DateCreated"),
-            URLQueryItem(name: "SortOrder", value: "Descending"),
-            URLQueryItem(name: "Limit", value: "100"),
-            URLQueryItem(name: "Fields", value: "Overview,MediaSources")
-        ]
-        let response = try await send(request(path: "/Items", query: query), as: JellyfinItemsResponse.self)
-        return response.items
+    func catalogItems(userID: String) async throws -> [MediaItem] {
+        let pageSize = 500
+        var startIndex = 0
+        var catalog: [MediaItem] = []
+        while true {
+            let query = [
+                URLQueryItem(name: "UserId", value: userID),
+                URLQueryItem(name: "IncludeItemTypes", value: "Movie,Episode"),
+                URLQueryItem(name: "Recursive", value: "true"),
+                URLQueryItem(name: "SortBy", value: "SortName"),
+                URLQueryItem(name: "SortOrder", value: "Ascending"),
+                URLQueryItem(name: "StartIndex", value: String(startIndex)),
+                URLQueryItem(name: "Limit", value: String(pageSize)),
+                URLQueryItem(name: "Fields", value: "Overview,MediaSources")
+            ]
+            let response = try await send(request(path: "/Items", query: query), as: JellyfinItemsResponse.self)
+            catalog.append(contentsOf: response.items)
+            startIndex += response.items.count
+            if response.items.isEmpty || response.items.count < pageSize ||
+                response.totalRecordCount.map({ startIndex >= $0 }) == true { break }
+        }
+        return catalog
     }
 
     func playbackURL(itemID: String, source: MediaSource) -> URL? {

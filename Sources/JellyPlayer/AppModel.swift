@@ -56,7 +56,7 @@ final class AppModel: ObservableObject {
                 password: configuration.password
             )
             let authenticated = try JellyfinClient(server: configuration.jellyfinURL, token: session.accessToken)
-            items = try await authenticated.latestItems(userID: session.user.id)
+            items = try await authenticated.catalogItems(userID: session.user.id)
             client = authenticated
             outputModes = configuration.outputModes
             configuredOutputModeDescriptions = configuration.outputModes.map {

@@ -22,9 +22,11 @@ struct JellyfinUser: Codable, Sendable {
 
 struct JellyfinItemsResponse: Codable, Sendable {
     let items: [MediaItem]
+    let totalRecordCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case items = "Items"
+        case totalRecordCount = "TotalRecordCount"
     }
 }
 
