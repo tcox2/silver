@@ -29,16 +29,17 @@ original, unchanged stream. The target machine's 24-core M2 Ultra is the baselin
 Playback is gated on exact output matching. The app requires a display mode with
 the media's exact pixel dimensions and a refresh rate that is an integer multiple
 of its declared frame rate, then verifies the active mode after switching. HDR
-media additionally requires an HDR-capable active display. Tahoe high dynamic
-range is used only for HDR; SDR explicitly uses standard dynamic range. If any
-requirement cannot be met, playback is blocked rather than shown incorrectly. The
-previous display mode is restored when playback stops.
+media additionally requires macOS to report an HDR-capable active display after
+the switch. Tahoe high dynamic range is used only for HDR; SDR explicitly uses
+standard dynamic range. Silver re-verifies exclusive fullscreen after each mode
+change and terminates if another app takes the display. If any requirement cannot
+be met, playback is blocked rather than shown incorrectly. The previous display
+mode is restored when playback stops.
 
 `outputModes` in `config.json` can provide explicit trusted mappings for HDMI
-timings that Core Graphics reports nominally. A forced mapping bypasses cadence
-and HDR-capability discovery only for an exact media resolution, frame rate, and
-dynamic range tuple; macOS must still successfully apply and report the configured
-output resolution and nominal refresh rate.
+timings that Core Graphics reports nominally. A forced mapping may select a timing
+that discovery does not identify correctly, but it never bypasses post-switch
+resolution, refresh-rate, HDR/SDR, or fullscreen verification.
 
 The output whitelist is limited to progressive HDMI presets in Sony's official
 VPL-VW790ES signal table. Core Graphics reports the projector's 23.976 and 29.970
@@ -59,12 +60,13 @@ default SDK symlink have different patch versions.
 
 ## Run
 
-Copy `config.example.json` to `config.json`, enter the Jellyfin URL and credentials,
-and restrict the file to the current user:
+Copy `config.example.json` to Silver's Application Support directory, enter the
+Jellyfin URL and credentials, and restrict the file to the current user:
 
 ```sh
-cp config.example.json config.json
-chmod 600 config.json
+mkdir -p "$HOME/Library/Application Support/Silver"
+cp config.example.json "$HOME/Library/Application Support/Silver/config.json"
+chmod 600 "$HOME/Library/Application Support/Silver/config.json"
 ```
 
 Then run:
@@ -76,8 +78,18 @@ Then run:
 The web controller listens on all interfaces on TCP port 8099. It is intended for
 a trusted home network; do not expose this port directly to the internet.
 
-Set `HOME_CINEMA_CONFIG` to an absolute path to use a configuration file outside
-the working directory. Configuration changes take effect on the next launch.
+For development, Silver falls back to `config.json` in the working directory.
+Set `HOME_CINEMA_CONFIG` to an absolute path to override both locations.
+Configuration changes take effect on the next launch.
+
+## Diagnostics
+
+Silver writes timestamped logs to `~/Library/Logs/Silver/silver.log` and rotates
+the previous file to `silver.old.log` at 5 MB. Display changes record the requested
+media format, configured and discovered modes, selected Core Graphics mode, active
+resolution and refresh rate, macOS current/potential/reference EDR values,
+fullscreen verification, and fail-closed reasons. Credentials, API keys, and
+complete direct-play URLs are never logged.
 
 Jellyfin access is mandatory. The app terminates if the configuration is missing
 or invalid, authentication is rejected, the server cannot be reached, or the
@@ -85,4 +97,6 @@ initial library request fails.
 
 The controller's Now Playing panel reports the live AVPlayer time and duration,
 play state, resolution, frame rate, HDR/SDR mode, video and audio codecs, and SRT
-status. Its timeline seeks the direct-play stream without requesting a transcode.
+status. An always-visible Current Output panel reports the active HDMI pixel
+resolution, refresh rate, HDR/SDR state, display name, and HDR capability. Its
+timeline seeks the direct-play stream without requesting a transcode.
