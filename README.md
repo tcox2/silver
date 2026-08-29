@@ -138,3 +138,9 @@ seconds fails closed instead of starting with an uncontrolled lip-sync offset.
 Every start and seek receives a monotonically increasing generation token; stop,
 replacement, or a newer seek invalidates older waits so stale asynchronous work
 can never release audio for the current playback.
+
+The compressed demux cache permits 1 GiB forward and 256 MiB backward. The
+asynchronous decoded-video queue permits 48 frames, two seconds, or 1536 MiB,
+whichever limit is reached first. At 23.976 fps this provides approximately two
+seconds of decoded-video headroom while leaving ample memory on the dedicated
+64 GiB cinema endpoint.

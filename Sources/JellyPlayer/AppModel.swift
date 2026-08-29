@@ -245,6 +245,8 @@ final class AppModel: ObservableObject {
                     "decoderQueue=\(self.mpv.string("vd-queue-enable") ?? "nil")/\(self.mpv.string("vd-queue-max-samples") ?? "nil")frames " +
                     "decoderQueueBytes=\(self.mpv.string("vd-queue-max-bytes") ?? "nil") " +
                     "decoderQueueSeconds=\(self.mpv.string("vd-queue-max-secs") ?? "nil") " +
+                    "demuxerMaxBytes=\(self.mpv.string("demuxer-max-bytes") ?? "nil") " +
+                    "demuxerMaxBackBytes=\(self.mpv.string("demuxer-max-back-bytes") ?? "nil") " +
                     "pausedForCache=\(self.mpv.string("paused-for-cache") ?? "nil") " +
                     "cacheDuration=\(self.mpv.string("demuxer-cache-duration") ?? "nil") " +
                     "cacheSpeed=\(self.mpv.string("cache-speed") ?? "nil") " +

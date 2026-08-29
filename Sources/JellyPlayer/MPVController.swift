@@ -54,10 +54,16 @@ final class MPVController {
         try option("border", "no")
         try option("hwdec", "no")
         try option("vd-lavc-threads", "16")
+        // Compressed input is cheap to retain and absorbs network or Jellyfin
+        // stalls. Decoded 4K P010 frames are much larger, so keep two seconds:
+        // approximately 1 GiB at 3840x1920/24 fps, with padding headroom.
+        try option("cache", "yes")
+        try option("demuxer-max-bytes", "1GiB")
+        try option("demuxer-max-back-bytes", "256MiB")
         try option("vd-queue-enable", "yes")
-        try option("vd-queue-max-samples", "12")
-        try option("vd-queue-max-bytes", "256MiB")
-        try option("vd-queue-max-secs", "1")
+        try option("vd-queue-max-samples", "48")
+        try option("vd-queue-max-bytes", "1536MiB")
+        try option("vd-queue-max-secs", "2")
         try option("vid", "auto")
         try option("aid", "auto")
         try option("sid", "auto")
@@ -73,7 +79,7 @@ final class MPVController {
         startEventLogging()
         attached = true
         attachmentError = nil
-        SilverLog.info("Media runtime initialized with embedded OpenGL render context, decoder queue, and display-resample synchronization")
+        SilverLog.info("Media runtime initialized with 1GiB/256MiB demux cache, 48-frame/2-second/1536MiB decoder queue, and display-resample synchronization")
         if let pendingURL {
             do { try load(pendingURL); self.pendingURL = nil }
             catch {
