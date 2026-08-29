@@ -1,0 +1,6 @@
+config.json
+.build/
+.build26/
+.cache/
+tmp/
+.DS_Store
