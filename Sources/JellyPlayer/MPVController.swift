@@ -47,6 +47,11 @@ final class MPVController {
         try option("fullscreen", "yes")
         try option("border", "no")
         try option("hwdec", "no")
+        try option("vd-lavc-threads", "16")
+        try option("vd-queue-enable", "yes")
+        try option("vd-queue-max-samples", "12")
+        try option("vd-queue-max-bytes", "256MiB")
+        try option("vd-queue-max-secs", "1")
         try option("vid", "auto")
         try option("aid", "auto")
         try option("sid", "auto")
@@ -58,7 +63,7 @@ final class MPVController {
         startEventLogging()
         attached = true
         attachmentError = nil
-        SilverLog.info("Media runtime initialized with embedded OpenGL render context")
+        SilverLog.info("Media runtime initialized with embedded OpenGL render context decoderThreads=16 decoderQueueFrames=12 decoderQueueBytes=256MiB decoderQueueSeconds=1")
         if let pendingURL {
             do { try load(pendingURL); self.pendingURL = nil }
             catch {

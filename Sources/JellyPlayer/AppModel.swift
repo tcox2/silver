@@ -18,6 +18,7 @@ final class AppModel: ObservableObject {
     private var playingSubtitleLabel = "Off"
     private var activeOutputLabel: String?
     private var isPreparingPlayback = false
+    private var playbackDiagnosticsTask: Task<Void, Never>?
     private var configurationError: String?
     private var isConfigured = false
     private var outputModes: [ConfiguredOutputMode] = []
@@ -168,27 +169,46 @@ final class AppModel: ObservableObject {
             SilverLog.info("Selected subtitle attached item=\(item.name) streamIndex=\(subtitle.index)")
         }
         SilverLog.info("Playback load issued item=\(item.name)")
-        Task { [weak self] in
+        playbackDiagnosticsTask?.cancel()
+        playbackDiagnosticsTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
-            guard let self, self.hasPlayback else { return }
-            let videoFormat = self.mpv.string("video-format")
-            let videoCodec = self.mpv.string("video-codec")
-            let voConfigured = self.mpv.string("vo-configured")
-            SilverLog.info(
-                "Playback diagnostics time=\(self.mpv.string("time-pos") ?? "nil") " +
-                "videoFormat=\(videoFormat ?? "nil") videoCodec=\(videoCodec ?? "nil") " +
-                "voConfigured=\(voConfigured ?? "nil") " +
-                "pausedForCache=\(self.mpv.string("paused-for-cache") ?? "nil")"
-            )
-            if voConfigured != "yes" || videoFormat == nil {
-                SilverLog.error("Playback stopped because decoded video output was not established")
-                self.stop()
+            while !Task.isCancelled, let self, self.hasPlayback {
+                let videoFormat = self.mpv.string("video-format")
+                let videoCodec = self.mpv.string("video-codec")
+                let voConfigured = self.mpv.string("vo-configured")
+                SilverLog.info(
+                    "Playback diagnostics time=\(self.mpv.string("time-pos") ?? "nil") " +
+                    "videoFormat=\(videoFormat ?? "nil") videoCodec=\(videoCodec ?? "nil") " +
+                    "voConfigured=\(voConfigured ?? "nil") " +
+                    "decoderDrops=\(self.mpv.string("decoder-frame-drop-count") ?? "nil") " +
+                    "rendererDrops=\(self.mpv.string("frame-drop-count") ?? "nil") " +
+                    "mistimedFrames=\(self.mpv.string("mistimed-frame-count") ?? "nil") " +
+                    "delayedFrames=\(self.mpv.string("vo-delayed-frame-count") ?? "nil") " +
+                    "avSync=\(self.mpv.string("avsync") ?? "nil") " +
+                    "totalAvSyncChange=\(self.mpv.string("total-avsync-change") ?? "nil") " +
+                    "decodedFPS=\(self.mpv.string("estimated-vf-fps") ?? "nil") " +
+                    "decoderQueue=\(self.mpv.string("vd-queue-enable") ?? "nil")/\(self.mpv.string("vd-queue-max-samples") ?? "nil")frames " +
+                    "decoderQueueBytes=\(self.mpv.string("vd-queue-max-bytes") ?? "nil") " +
+                    "decoderQueueSeconds=\(self.mpv.string("vd-queue-max-secs") ?? "nil") " +
+                    "pausedForCache=\(self.mpv.string("paused-for-cache") ?? "nil") " +
+                    "cacheDuration=\(self.mpv.string("demuxer-cache-duration") ?? "nil") " +
+                    "cacheSpeed=\(self.mpv.string("cache-speed") ?? "nil") " +
+                    "cacheIdle=\(self.mpv.string("demuxer-cache-idle") ?? "nil")"
+                )
+                if voConfigured != "yes" || videoFormat == nil {
+                    SilverLog.error("Playback stopped because decoded video output was not established")
+                    self.stop()
+                    return
+                }
+                try? await Task.sleep(for: .seconds(10))
             }
         }
     }
 
     func stop() {
         if let playingItem { SilverLog.info("Stopping playback item=\(playingItem.name)") }
+        playbackDiagnosticsTask?.cancel()
+        playbackDiagnosticsTask = nil
         mpv.stop()
         display.restore()
         isHDR = false
