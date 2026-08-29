@@ -19,7 +19,10 @@ final class AppModel: ObservableObject {
     private var activeSubtitleFile: URL?
     private var activeOutputLabel: String?
     private var isPreparingPlayback = false
-    private var isPrebuffering = false
+    private var playbackGeneration = PlaybackOperationGeneration()
+    private var prebufferingGeneration: UInt64?
+    private var userPaused = false
+    private var isPrebuffering: Bool { prebufferingGeneration != nil }
     private var playbackDiagnosticsTask: Task<Void, Never>?
     private var configurationError: String?
     private var isConfigured = false
@@ -141,6 +144,8 @@ final class AppModel: ObservableObject {
         }
         SilverLog.info("Playback requested item=\(item.name) source=\(source.id) subtitle=\(subtitle?.index.description ?? "off")")
         stop()
+        let generation = playbackGeneration.advance()
+        userPaused = false
         activeSubtitleFile = preparedSubtitleURL
         playingItem = item
         playingSource = source
@@ -168,6 +173,9 @@ final class AppModel: ObservableObject {
         }
         hasPlayback = true
         await Task.yield()
+        guard playbackGeneration.isCurrent(generation), hasPlayback else {
+            throw MPVError.videoPrebufferSuperseded
+        }
         if let error = mpv.attachmentError {
             stop()
             cinemaDelegate.endDisplayModeChange()
@@ -176,6 +184,9 @@ final class AppModel: ObservableObject {
         guard await cinemaDelegate.verifyDisplayGrabAfterModeChange() else {
             stop()
             throw DisplayModeError.displayGrabLost
+        }
+        guard playbackGeneration.isCurrent(generation), hasPlayback else {
+            throw MPVError.videoPrebufferSuperseded
         }
         guard let outputRefreshRate = currentDisplayOutput()?.refreshRate else {
             stop()
@@ -199,12 +210,16 @@ final class AppModel: ObservableObject {
         }
         SilverLog.info("Playback load issued item=\(item.name); holding audio for decoded-video prebuffer")
         do {
-            try await waitForDecodedVideo(reason: "startup", expectedPosition: nil)
-            try mpv.setPaused(false)
-            SilverLog.info("Decoded-video prebuffer released item=\(item.name) reason=startup")
+            try await waitForDecodedVideo(reason: "startup", expectedPosition: nil, generation: generation)
+            if !userPaused { try mpv.setPaused(false) }
+            SilverLog.info("Decoded-video prebuffer released item=\(item.name) reason=startup resume=\(!userPaused)")
         } catch {
-            SilverLog.error("Playback prebuffer failed item=\(item.name) error=\(error.localizedDescription)")
-            stop()
+            if playbackGeneration.isCurrent(generation) {
+                SilverLog.error("Playback prebuffer failed item=\(item.name) error=\(error.localizedDescription)")
+                stop()
+            } else {
+                SilverLog.info("Playback prebuffer superseded item=\(item.name)")
+            }
             throw error
         }
         playbackDiagnosticsTask?.cancel()
@@ -264,6 +279,7 @@ final class AppModel: ObservableObject {
     }
 
     func stop() {
+        _ = playbackGeneration.advance()
         if let playingItem { SilverLog.info("Stopping playback item=\(playingItem.name)") }
         playbackDiagnosticsTask?.cancel()
         playbackDiagnosticsTask = nil
@@ -280,25 +296,31 @@ final class AppModel: ObservableObject {
         playingSource = nil
         playingSubtitleLabel = "Off"
         activeOutputLabel = nil
-        isPrebuffering = false
+        prebufferingGeneration = nil
+        userPaused = false
     }
 
     func seek(to seconds: Double) async throws {
         guard hasPlayback else { throw CinemaError.nothingPlaying }
+        guard !isPreparingPlayback else { throw CinemaError.busy }
         guard seconds.isFinite else { return }
         let duration = mpv.number("duration") ?? 0
         let target = max(0, duration.isFinite && duration > 0 ? min(seconds, duration) : seconds)
-        let wasPaused = mpv.string("pause") == "yes"
-        try mpv.setPaused(true)
-        SilverLog.info("Holding audio for decoded-video prebuffer reason=seek target=\(String(format: "%.3f", target))")
-        mpv.seek(to: target)
+        let generation = playbackGeneration.advance()
         do {
-            try await waitForDecodedVideo(reason: "seek", expectedPosition: target)
-            if !wasPaused { try mpv.setPaused(false) }
-            SilverLog.info("Decoded-video prebuffer released item=\(playingItem?.name ?? "unknown") reason=seek target=\(String(format: "%.3f", target)) resume=\(!wasPaused)")
+            try mpv.setPaused(true)
+            SilverLog.info("Holding audio for decoded-video prebuffer reason=seek target=\(String(format: "%.3f", target)) generation=\(generation)")
+            try mpv.seek(to: target)
+            try await waitForDecodedVideo(reason: "seek", expectedPosition: target, generation: generation)
+            if !userPaused { try mpv.setPaused(false) }
+            SilverLog.info("Decoded-video prebuffer released item=\(playingItem?.name ?? "unknown") reason=seek target=\(String(format: "%.3f", target)) resume=\(!userPaused) generation=\(generation)")
         } catch {
-            SilverLog.error("Seek prebuffer failed item=\(playingItem?.name ?? "unknown") target=\(String(format: "%.3f", target)) error=\(error.localizedDescription)")
-            stop()
+            if playbackGeneration.isCurrent(generation) {
+                SilverLog.error("Seek prebuffer failed item=\(playingItem?.name ?? "unknown") target=\(String(format: "%.3f", target)) error=\(error.localizedDescription)")
+                stop()
+            } else {
+                SilverLog.info("Seek prebuffer superseded target=\(String(format: "%.3f", target)) generation=\(generation)")
+            }
             throw error
         }
     }
@@ -307,6 +329,7 @@ final class AppModel: ObservableObject {
         guard hasPlayback else { throw CinemaError.nothingPlaying }
         SilverLog.info("Pausing playback item=\(playingItem?.name ?? "unknown")")
         try mpv.setPaused(true)
+        userPaused = true
     }
 
     func resume() throws {
@@ -314,6 +337,7 @@ final class AppModel: ObservableObject {
         guard !isPrebuffering else { throw CinemaError.busy }
         SilverLog.info("Resuming playback item=\(playingItem?.name ?? "unknown")")
         try mpv.setPaused(false)
+        userPaused = false
     }
 
     func webStatus() -> WebPlaybackStatus {
@@ -363,19 +387,27 @@ final class AppModel: ObservableObject {
         )
     }
 
-    private func waitForDecodedVideo(reason: String, expectedPosition: Double?) async throws {
-        isPrebuffering = true
-        defer { isPrebuffering = false }
+    private func waitForDecodedVideo(reason: String, expectedPosition: Double?, generation: UInt64) async throws {
+        prebufferingGeneration = generation
+        defer {
+            if prebufferingGeneration == generation { prebufferingGeneration = nil }
+        }
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(15))
         var lastSample = mpv.prebufferSample()
         while clock.now < deadline {
+            guard playbackGeneration.isCurrent(generation) else {
+                throw MPVError.videoPrebufferSuperseded
+            }
             guard hasPlayback else { throw MPVError.videoPrebuffer }
             lastSample = mpv.prebufferSample()
             if lastSample.isReady(expectedPosition: expectedPosition, minimumDemuxedSeconds: 3) {
                 // Reject a transient property update: readiness must survive
                 // more than two frames of the 24 Hz output clock.
                 try await Task.sleep(for: .milliseconds(100))
+                guard playbackGeneration.isCurrent(generation) else {
+                    throw MPVError.videoPrebufferSuperseded
+                }
                 let confirmed = mpv.prebufferSample()
                 if confirmed.isReady(expectedPosition: expectedPosition, minimumDemuxedSeconds: 3) {
                     SilverLog.info(

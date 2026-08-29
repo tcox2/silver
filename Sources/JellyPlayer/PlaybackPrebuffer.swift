@@ -1,5 +1,18 @@
 import Foundation
 
+struct PlaybackOperationGeneration: Equatable {
+    private(set) var current: UInt64 = 0
+
+    mutating func advance() -> UInt64 {
+        current &+= 1
+        return current
+    }
+
+    func isCurrent(_ generation: UInt64) -> Bool {
+        generation == current
+    }
+}
+
 struct PlaybackPrebufferSample: Equatable {
     let videoOutputConfigured: Bool
     let videoFormatAvailable: Bool

@@ -3,6 +3,12 @@ import Foundation
 @main
 enum PlaybackPrebufferTests {
     static func main() {
+        var generations = PlaybackOperationGeneration()
+        let first = generations.advance()
+        check(generations.isCurrent(first), "new generation should be current")
+        let second = generations.advance()
+        check(!generations.isCurrent(first), "older generation should be superseded")
+        check(generations.isCurrent(second), "latest generation should remain current")
         check(
             PlaybackPrebufferSample(
                 videoOutputConfigured: true,

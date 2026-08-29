@@ -135,3 +135,6 @@ mpv has configured video output, decoded a frame at the requested timestamp, and
 buffered at least three seconds of demuxed input. Audio and video are then
 released together. A prebuffer that cannot satisfy those conditions within 15
 seconds fails closed instead of starting with an uncontrolled lip-sync offset.
+Every start and seek receives a monotonically increasing generation token; stop,
+replacement, or a newer seek invalidates older waits so stale asynchronous work
+can never release audio for the current playback.
