@@ -1,7 +1,6 @@
 {
-  "jellyfinURL": "https://media.example.com:8920",
-  "username": "home-cinema",
-  "password": "replace-me",
+  "jellyfinURL": "https://leeloo.gipsy.cloud:8920",
+  "username": "t",
   "outputModes": [
     {
       "label": "4K Film HDR",
@@ -24,6 +23,102 @@
       "displayHeight": 1080,
       "displayRefreshRate": 24.0,
       "force": true
+    },
+    {
+      "label": "4K Film SDR",
+      "mediaWidth": 3840, "mediaHeight": 2160, "mediaFrameRate": 23.976,
+      "mediaDynamicRange": "sdr", "displayWidth": 3840, "displayHeight": 2160,
+      "displayRefreshRate": 24.0, "force": true
+    },
+    {
+      "label": "1080p NTSC SDR",
+      "mediaWidth": 1920, "mediaHeight": 1080, "mediaFrameRate": 29.97,
+      "mediaDynamicRange": "sdr", "displayWidth": 3840, "displayHeight": 2160,
+      "displayRefreshRate": 30.0, "force": true
+    },
+    {
+      "label": "1080p PAL SDR",
+      "mediaWidth": 1920, "mediaHeight": 1080, "mediaFrameRate": 25.0,
+      "mediaDynamicRange": "sdr", "displayWidth": 3840, "displayHeight": 2160,
+      "displayRefreshRate": 25.0, "force": true
+    },
+    {
+      "label": "1080p PAL HFR SDR",
+      "mediaWidth": 1920, "mediaHeight": 1080, "mediaFrameRate": 50.0,
+      "mediaDynamicRange": "sdr", "displayWidth": 1920, "displayHeight": 1080,
+      "displayRefreshRate": 50.0, "force": true
+    },
+    {
+      "label": "4K Cinema HDR",
+      "mediaWidth": 3840, "mediaHeight": 2160, "mediaFrameRate": 24.0,
+      "mediaDynamicRange": "hdr", "displayWidth": 4096, "displayHeight": 2160,
+      "displayRefreshRate": 24.0, "force": true
+    },
+    {
+      "label": "4K PAL HDR",
+      "mediaWidth": 3840, "mediaHeight": 2160, "mediaFrameRate": 25.0,
+      "mediaDynamicRange": "hdr", "displayWidth": 3840, "displayHeight": 2160,
+      "displayRefreshRate": 25.0, "force": true
+    },
+    {
+      "label": "4K NTSC SDR",
+      "mediaWidth": 3840, "mediaHeight": 2160, "mediaFrameRate": 29.97,
+      "mediaDynamicRange": "sdr", "displayWidth": 3840, "displayHeight": 2160,
+      "displayRefreshRate": 30.0, "force": true
+    },
+    {
+      "label": "480p NTSC HFR SDR",
+      "mediaWidth": 720, "mediaHeight": 480, "mediaFrameRate": 59.94,
+      "mediaDynamicRange": "sdr", "displayWidth": 720, "displayHeight": 480,
+      "displayRefreshRate": 60.0, "force": true
+    },
+    {
+      "label": "480p NTSC SDR",
+      "mediaWidth": 720, "mediaHeight": 480, "mediaFrameRate": 29.97,
+      "mediaDynamicRange": "sdr", "displayWidth": 3840, "displayHeight": 2160,
+      "displayRefreshRate": 30.0, "force": true
+    },
+    {
+      "label": "576p PAL SDR",
+      "mediaWidth": 720, "mediaHeight": 576, "mediaFrameRate": 25.0,
+      "mediaDynamicRange": "sdr", "displayWidth": 720, "displayHeight": 576,
+      "displayRefreshRate": 50.0, "force": true
+    },
+    {
+      "label": "720p Film SDR",
+      "mediaWidth": 1280, "mediaHeight": 720, "mediaFrameRate": 23.976,
+      "mediaDynamicRange": "sdr", "displayWidth": 1920, "displayHeight": 1080,
+      "displayRefreshRate": 24.0, "force": true
+    },
+    {
+      "label": "Anamorphic 1080 Film SDR",
+      "mediaWidth": 1440, "mediaHeight": 1080, "mediaFrameRate": 23.976,
+      "mediaDynamicRange": "sdr", "displayWidth": 1920, "displayHeight": 1080,
+      "displayRefreshRate": 24.0, "force": true
+    },
+    {
+      "label": "Anamorphic 1080 NTSC SDR",
+      "mediaWidth": 1440, "mediaHeight": 1080, "mediaFrameRate": 29.97,
+      "mediaDynamicRange": "sdr", "displayWidth": 3840, "displayHeight": 2160,
+      "displayRefreshRate": 30.0, "force": true
+    },
+    {
+      "label": "4K Scope Film HDR",
+      "mediaWidth": 3840, "mediaHeight": 1920, "mediaFrameRate": 23.976,
+      "mediaDynamicRange": "hdr", "displayWidth": 4096, "displayHeight": 2160,
+      "displayRefreshRate": 24.0, "force": true
+    },
+    {
+      "label": "4K Scope PAL HDR",
+      "mediaWidth": 3840, "mediaHeight": 1920, "mediaFrameRate": 25.0,
+      "mediaDynamicRange": "hdr", "displayWidth": 3840, "displayHeight": 2160,
+      "displayRefreshRate": 25.0, "force": true
+    },
+    {
+      "label": "4K UltraWide Cinema HDR",
+      "mediaWidth": 3840, "mediaHeight": 1600, "mediaFrameRate": 24.0,
+      "mediaDynamicRange": "hdr", "displayWidth": 3840, "displayHeight": 2160,
+      "displayRefreshRate": 24.0, "force": true
     }
   ]
 }
