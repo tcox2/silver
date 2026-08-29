@@ -26,6 +26,11 @@ final class AppModel: ObservableObject {
     func start() {
         guard webServer == nil else { return }
         CinemaRestoration.restore = { [weak self] in self?.stop() }
+        mpv.playbackEnded = { [weak self] in
+            guard let self, self.hasPlayback else { return }
+            SilverLog.info("Playback reached end of file item=\(self.playingItem?.name ?? "unknown")")
+            self.stop()
+        }
         do {
             try display.ensureIdleSDR()
         } catch {

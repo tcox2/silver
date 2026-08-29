@@ -30,6 +30,7 @@ final class MPVController {
     private var renderReportSwap: RenderReportSwap?
     private weak var renderView: MPVOpenGLView?
     private(set) var attachmentError: Error?
+    var playbackEnded: (() -> Void)?
 
     func attach(to view: MPVOpenGLView) throws {
         guard !attached else { return }
@@ -156,7 +157,10 @@ final class MPVController {
             while let self, self.eventLoopRunning {
                 guard let rawEvent = wait(handle, 0.25) else { continue }
                 let event = rawEvent.assumingMemoryBound(to: MPVEvent.self)
-                // MPV_EVENT_LOG_MESSAGE = 2, MPV_EVENT_SHUTDOWN = 1.
+                // MPV_EVENT_LOG_MESSAGE = 2, MPV_EVENT_SHUTDOWN = 1,
+                // MPV_EVENT_END_FILE = 7. Only a natural EOF should return
+                // Silver to its idle display state; stop/replacement events
+                // already use AppModel.stop().
                 if event.pointee.eventID == 2, let data = event.pointee.data {
                     let message = data.assumingMemoryBound(to: MPVLogMessage.self).pointee
                     guard let text = message.text else { continue }
@@ -167,6 +171,14 @@ final class MPVController {
                         SilverLog.info("mpv[\(prefix)] [media request redacted]")
                     } else {
                         SilverLog.info("mpv[\(prefix)] \(raw)")
+                    }
+                } else if event.pointee.eventID == 7, let data = event.pointee.data {
+                    let endFile = data.assumingMemoryBound(to: MPVEventEndFile.self).pointee
+                    if endFile.reason == 0 {
+                        SilverLog.info("Media runtime reported natural end of file")
+                        DispatchQueue.main.async { [weak self] in
+                            self?.playbackEnded?()
+                        }
                     }
                 } else if event.pointee.eventID == 1 {
                     break
@@ -274,6 +286,14 @@ private struct MPVEvent {
     let error: Int32
     let replyUserdata: UInt64
     let data: UnsafeMutableRawPointer?
+}
+
+private struct MPVEventEndFile {
+    let reason: Int32
+    let error: Int32
+    let playlistEntryID: Int64
+    let playlistInsertID: Int64
+    let playlistInsertNumEntries: Int32
 }
 
 private struct MPVLogMessage {
