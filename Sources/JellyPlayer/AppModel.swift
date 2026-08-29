@@ -132,12 +132,19 @@ final class AppModel: ObservableObject {
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
             guard let self, self.hasPlayback else { return }
+            let videoFormat = self.mpv.string("video-format")
+            let videoCodec = self.mpv.string("video-codec")
+            let voConfigured = self.mpv.string("vo-configured")
             SilverLog.info(
                 "Playback diagnostics time=\(self.mpv.string("time-pos") ?? "nil") " +
-                "videoFormat=\(self.mpv.string("video-format") ?? "nil") " +
-                "voConfigured=\(self.mpv.string("vo-configured") ?? "nil") " +
+                "videoFormat=\(videoFormat ?? "nil") videoCodec=\(videoCodec ?? "nil") " +
+                "voConfigured=\(voConfigured ?? "nil") " +
                 "pausedForCache=\(self.mpv.string("paused-for-cache") ?? "nil")"
             )
+            if voConfigured != "yes" || videoFormat == nil {
+                SilverLog.error("Playback stopped because decoded video output was not established")
+                self.stop()
+            }
         }
     }
 

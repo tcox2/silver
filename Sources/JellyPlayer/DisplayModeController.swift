@@ -6,6 +6,14 @@ final class DisplayModeController {
     private var originalMode: CGDisplayMode?
     private let privateHDR = PrivateHDRController()
 
+    func ensureIdleSDR() throws {
+        guard let screen = NSScreen.main,
+              let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            throw DisplayModeError.noDisplay
+        }
+        try privateHDR.ensureDisabled(displayID: number.uint32Value)
+    }
+
     func apply(
         width: Int?,
         height: Int?,

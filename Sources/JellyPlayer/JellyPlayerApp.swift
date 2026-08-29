@@ -30,6 +30,7 @@ final class CinemaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var isTerminating = false
     private var isChangingDisplayMode = false
     private var cinemaDisplayID: CGDirectDisplayID?
+    private weak var cinemaWindow: NSWindow?
 
     override init() {
         super.init()
@@ -45,6 +46,7 @@ final class CinemaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
             }
             NSApp.activate(ignoringOtherApps: true)
             window.delegate = self
+            self.cinemaWindow = window
             self.cinemaDisplayID = window.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
             window.makeKeyAndOrderFront(nil)
             window.toggleFullScreen(nil)
@@ -96,7 +98,7 @@ final class CinemaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     func prepareDynamicRange(hdr: Bool) {
-        guard let window = NSApp.windows.first else { return }
+        guard let window = cinemaWindow else { return }
         window.contentView?.wantsLayer = true
         window.contentView?.layer?.preferredDynamicRange = hdr ? .high : .standard
     }
@@ -111,7 +113,7 @@ final class CinemaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     func verifyDisplayGrabAfterModeChange() async -> Bool {
         defer { isChangingDisplayMode = false }
-        guard let window = NSApp.windows.first else {
+        guard let window = cinemaWindow else {
             failDisplayGrab("the cinema window disappeared during the mode change")
             return false
         }
@@ -137,6 +139,18 @@ final class CinemaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         }
         failDisplayGrab("full screen was lost during the display mode change")
         return false
+    }
+
+    func beginPlaybackPresentation() {
+        guard let window = cinemaWindow else { return }
+        SilverLog.info("Handing visible projector surface to native Cocoa video output")
+        window.orderOut(nil)
+    }
+
+    func endPlaybackPresentation() {
+        guard let window = cinemaWindow, !isTerminating else { return }
+        window.makeKeyAndOrderFront(nil)
+        SilverLog.info("Restored Silver projector surface")
     }
 }
 

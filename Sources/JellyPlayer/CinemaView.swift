@@ -48,9 +48,7 @@ private struct PlayerSurface: NSViewRepresentable {
     let hdr: Bool
 
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.black.cgColor
+        let view = MPVOpenGLView()
         do {
             try controller.attach(to: view)
         } catch {
