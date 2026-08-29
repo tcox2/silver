@@ -12,13 +12,16 @@ final class WebController: @unchecked Sendable {
         do {
             let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: port)!)
             listener.newConnectionHandler = { [weak self] in self?.accept($0) }
-            listener.stateUpdateHandler = { state in
-                if case let .failed(error) = state { fputs("Web controller failed: \(error)\n", stderr) }
+            listener.stateUpdateHandler = { [weak self] state in
+                if case let .failed(error) = state {
+                    Task { @MainActor in self?.model?.webControllerFailed(error.localizedDescription) }
+                }
             }
             self.listener = listener
             listener.start(queue: queue)
+            SilverLog.info("Web controller listening port=\(port)")
         } catch {
-            fputs("Unable to start web controller: \(error)\n", stderr)
+            SilverLog.error("Unable to start web controller: \(error)")
         }
     }
 
@@ -41,10 +44,12 @@ final class WebController: @unchecked Sendable {
                 sendJSON(await model.webLibrary(), to: connection)
             case ("POST", "/api/play"):
                 let command = try JSONDecoder().decode(PlayCommand.self, from: request.body)
+                SilverLog.info("Web command play itemID=\(command.id)")
                 guard let model else { throw CinemaError.incompatible }
                 try await model.play(itemID: command.id)
                 sendJSON(["ok": true], to: connection)
             case ("POST", "/api/stop"):
+                SilverLog.info("Web command stop")
                 await model?.stop()
                 sendJSON(["ok": true], to: connection)
             case ("GET", "/api/status"):
@@ -52,12 +57,14 @@ final class WebController: @unchecked Sendable {
                 sendJSON(await model.webStatus(), to: connection)
             case ("POST", "/api/seek"):
                 let command = try JSONDecoder().decode(SeekCommand.self, from: request.body)
+                SilverLog.info("Web command seek seconds=\(String(format: "%.3f", command.seconds))")
                 await model?.seek(to: command.seconds)
                 sendJSON(["ok": true], to: connection)
             default:
                 send(status: 404, body: "Not found", to: connection)
             }
         } catch {
+            SilverLog.error("Web request failed method=\(request.method) path=\(request.path) error=\(error.localizedDescription)")
             send(status: 422, contentType: "application/json", body: "{\"error\":\"\(escape(error.localizedDescription))\"}", to: connection)
         }
     }
@@ -73,7 +80,7 @@ final class WebController: @unchecked Sendable {
 
     private func send(status: Int, contentType: String, data: Data, to connection: NWConnection) {
         let reason = status == 200 ? "OK" : "Error"
-        let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(contentType)\r\nContent-Length: \(data.count)\r\nConnection: close\r\n\r\n"
+        let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(contentType)\r\nContent-Length: \(data.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(header.utf8) + data, completion: .contentProcessed { _ in connection.cancel() })
     }
 
@@ -83,8 +90,8 @@ final class WebController: @unchecked Sendable {
 
     private static let page = #"""
     <!doctype html><meta name="viewport" content="width=device-width"><title>Silver</title>
-    <style>body{margin:0;background:#080808;color:#eee;font:16px system-ui;max-width:900px;padding:32px;margin:auto}h1,h2{font-weight:300}input,button{font:inherit;padding:12px;border-radius:8px;border:1px solid #444;background:#181818;color:white}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.4}.item{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid #292929}.item.incompatible{color:#999}.muted{color:#999;font-size:13px}.reason{color:#e6a85c;font-size:12px;margin-top:3px}#error{color:#ff7777;white-space:pre-wrap}#now{background:#141414;border:1px solid #303030;border-radius:12px;padding:20px;margin:22px 0}.facts{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.fact{background:#252525;border-radius:999px;padding:5px 10px;font-size:13px}.timeline{display:grid;grid-template-columns:60px 1fr 60px;gap:10px;align-items:center;font-variant-numeric:tabular-nums}.timeline input{padding:0;width:100%;accent-color:#eee}</style>
-    <h1>home cinema</h1><p id="error"></p><section id="library" hidden><article id="now" hidden><div class="muted">NOW PLAYING</div><h2 id="nowTitle"></h2><div id="nowDetail" class="muted"></div><div id="facts" class="facts"></div><div class="timeline"><span id="elapsed">0:00</span><input id="seek" type="range" min="0" value="0" step="0.1"><span id="duration">0:00</span></div><p><button onclick="command('/api/stop',{})">Stop playback</button></p></article><div id="idle" class="muted">Nothing playing</div><div id="items"></div></section>
+    <style>body{margin:0;background:#080808;color:#eee;font:16px system-ui;max-width:900px;padding:32px;margin:auto}h1,h2{font-weight:300}input,button{font:inherit;padding:12px;border-radius:8px;border:1px solid #444;background:#181818;color:white}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.4}.item{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid #292929}.item.incompatible{color:#999}.muted{color:#999;font-size:13px}.reason{color:#e6a85c;font-size:12px;margin-top:3px}#error{color:#ff7777;white-space:pre-wrap}#output,#now{background:#141414;border:1px solid #303030;border-radius:12px;padding:20px;margin:22px 0}.facts{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.fact{background:#252525;border-radius:999px;padding:5px 10px;font-size:13px}.timeline{display:grid;grid-template-columns:60px 1fr 60px;gap:10px;align-items:center;font-variant-numeric:tabular-nums}.timeline input{padding:0;width:100%;accent-color:#eee}</style>
+    <h1>home cinema</h1><p id="error"></p><section id="library" hidden><article id="output"><div class="muted">CURRENT OUTPUT</div><h2 id="outputResolution">Unavailable</h2><div id="outputFacts" class="facts"></div></article><article id="now" hidden><div class="muted">NOW PLAYING</div><h2 id="nowTitle"></h2><div id="nowDetail" class="muted"></div><div id="facts" class="facts"></div><div class="timeline"><span id="elapsed">0:00</span><input id="seek" type="range" min="0" value="0" step="0.1"><span id="duration">0:00</span></div><p><button onclick="command('/api/stop',{})">Stop playback</button></p></article><div id="idle" class="muted">Nothing playing</div><div id="items"></div></section>
     <script>
     const error=document.querySelector('#error');
     async function command(path,body){let r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});let j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j}
@@ -93,7 +100,7 @@ final class WebController: @unchecked Sendable {
     async function loadLibrary(){error.textContent='Loading library…';try{let r=await fetch('/api/library');renderLibrary(await r.json())}catch(e){error.textContent=e.message}};
     let dragging=false;seek.onpointerdown=()=>dragging=true;seek.onpointerup=async()=>{dragging=false;try{await command('/api/seek',{seconds:+seek.value})}catch(e){error.textContent=e.message}};
     const clock=s=>{s=Math.max(0,Math.floor(s||0));let h=Math.floor(s/3600),m=Math.floor(s%3600/60),v=String(s%60).padStart(2,'0');return h?`${h}:${String(m).padStart(2,'0')}:${v}`:`${m}:${v}`};
-    async function status(){if(library.hidden)return;try{let r=await fetch('/api/status'),j=await r.json(),n=j.nowPlaying;now.hidden=!n;idle.hidden=!!n;if(!n)return;nowTitle.textContent=n.title;nowDetail.textContent=`${n.detail} · ${n.state}${n.error?' · '+n.error:''}`;facts.innerHTML=[n.outputMode,n.videoCodec,n.audioCodec,n.subtitles,n.dynamicRange,n.width&&n.height?`${n.width}×${n.height}`:null,n.frameRate?`${n.frameRate.toFixed(3)} fps`:null].filter(Boolean).map(x=>`<span class="fact">${html(x)}</span>`).join('');if(!dragging){seek.max=n.duration||Math.max(n.currentTime,1);seek.value=n.currentTime}elapsed.textContent=clock(dragging?seek.value:n.currentTime);duration.textContent=n.duration?clock(n.duration):'–:––'}catch(e){console.error(e)}}
+    async function status(){if(library.hidden)return;try{let r=await fetch('/api/status'),j=await r.json(),o=j.currentOutput,n=j.nowPlaying;if(o){outputResolution.textContent=`${o.width}×${o.height}`;outputFacts.innerHTML=[`${o.refreshRate.toFixed(3)} Hz`,o.dynamicRange,o.name,o.hdrPotential?'HDR capable':'SDR only'].map(x=>`<span class="fact">${html(x)}</span>`).join('')}else{outputResolution.textContent='Unavailable';outputFacts.innerHTML=''}now.hidden=!n;idle.hidden=!!n;if(!n)return;nowTitle.textContent=n.title;nowDetail.textContent=`${n.detail} · ${n.state}${n.error?' · '+n.error:''}`;facts.innerHTML=[n.outputMode,n.videoCodec,n.audioCodec,n.subtitles,n.dynamicRange,n.width&&n.height?`${n.width}×${n.height}`:null,n.frameRate?`${n.frameRate.toFixed(3)} fps`:null].filter(Boolean).map(x=>`<span class="fact">${html(x)}</span>`).join('');if(!dragging){seek.max=n.duration||Math.max(n.currentTime,1);seek.value=n.currentTime}elapsed.textContent=clock(dragging?seek.value:n.currentTime);duration.textContent=n.duration?clock(n.duration):'–:––'}catch(e){console.error(e)}}
     seek.oninput=()=>{if(dragging)elapsed.textContent=clock(seek.value)};setInterval(status,1000);loadLibrary();
     </script>
     """#

@@ -19,6 +19,7 @@ final class MPVController {
     func attach(to view: NSView) throws {
         guard !attached else { return }
         let path = "/Applications/Jellyfin Desktop.app/Contents/Frameworks/libmpv.2.dylib"
+        SilverLog.info("Loading media runtime path=\(path)")
         guard let library = dlopen(path, RTLD_NOW | RTLD_LOCAL) else { throw MPVError.unavailable }
         self.library = library
         let create: Create = try symbol("mpv_create")
@@ -33,17 +34,23 @@ final class MPVController {
         let initialize: Initialize = try symbol("mpv_initialize")
         guard initialize(handle) >= 0 else { throw MPVError.initialization }
         attached = true
+        SilverLog.info("Media runtime initialized and attached to cinema surface")
         if let pendingURL {
             do { try load(pendingURL); self.pendingURL = nil }
             catch {
-                fputs("Playback engine load failed: \(error.localizedDescription)\n", stderr)
+                SilverLog.error("Playback engine load failed: \(error.localizedDescription)")
                 throw error
             }
         }
     }
 
     func load(_ url: URL) throws {
-        guard attached else { pendingURL = url; return }
+        guard attached else {
+            SilverLog.info("Media load queued until video surface is attached")
+            pendingURL = url
+            return
+        }
+        SilverLog.info("Sending direct-play URL to media runtime host=\(url.host ?? "unknown")")
         try command(["loadfile", url.absoluteString, "replace"])
     }
 

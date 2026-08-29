@@ -12,6 +12,7 @@ final class DisplayModeController {
         hdr: Bool,
         configuredModes: [ConfiguredOutputMode]
     ) throws -> String {
+        SilverLog.info("Display request media=\(width.map(String.init) ?? "unknown")x\(height.map(String.init) ?? "unknown") fps=\(frameRate.map { String(format: "%.6f", $0) } ?? "unknown") range=\(hdr ? "HDR" : "SDR")")
         guard let width, let height else { throw DisplayModeError.missingResolution }
         guard let frameRate, frameRate > 0 else { throw DisplayModeError.missingFrameRate }
         guard let screen = NSScreen.main,
@@ -20,8 +21,14 @@ final class DisplayModeController {
             throw DisplayModeError.noDisplay
         }
         let displayID = number.uint32Value
+        SilverLog.info("Display target id=\(displayID) name=\(screen.localizedName) currentEDR=\(screen.maximumExtendedDynamicRangeColorComponentValue) potentialEDR=\(screen.maximumPotentialExtendedDynamicRangeColorComponentValue)")
         if originalMode == nil { originalMode = CGDisplayCopyDisplayMode(displayID) }
         let override = configuredModes.first { $0.matches(width: width, height: height, frameRate: frameRate, hdr: hdr) }
+        if let override {
+            SilverLog.info("Configured mode label=\(override.label) output=\(override.displayWidth)x\(override.displayHeight) nominalHz=\(String(format: "%.6f", override.displayRefreshRate)) force=\(override.force)")
+        } else {
+            SilverLog.info("No configured override matched; selecting an exact-cadence discovered mode")
+        }
         if let override, !SonyVW790ES.supports(
             width: override.displayWidth,
             height: override.displayHeight,
@@ -43,9 +50,14 @@ final class DisplayModeController {
                 && (override.map { abs(mode.refreshRate - $0.displayRefreshRate) < 0.01 }
                     ?? exactCadence(mode.refreshRate, frameRate: frameRate))
         }
+        let available = modes.filter { $0.pixelWidth == outputWidth && $0.pixelHeight == outputHeight }
+            .map { String(format: "%.6f", $0.refreshRate) }.joined(separator: ",")
+        SilverLog.info("Discovered output modes resolution=\(outputWidth)x\(outputHeight) refreshRates=[\(available)] matchingCount=\(matching.count)")
         guard let best = matching.max(by: { $0.refreshRate < $1.refreshRate }) else {
+            SilverLog.error("No eligible display mode for \(outputWidth)x\(outputHeight) at requested cadence")
             throw DisplayModeError.noExactMode(outputWidth, outputHeight, override?.displayRefreshRate ?? frameRate)
         }
+        SilverLog.info("Selected mode pixels=\(best.pixelWidth)x\(best.pixelHeight) points=\(best.width)x\(best.height) nominalHz=\(String(format: "%.6f", best.refreshRate)) modeID=\(best.ioDisplayModeID) flags=0x\(String(best.ioFlags, radix: 16))")
         var result = CGDisplaySetDisplayMode(displayID, best, nil)
         if result != .success {
             var configuration: CGDisplayConfigRef?
@@ -60,6 +72,7 @@ final class DisplayModeController {
             }
         }
         guard result == .success else {
+            SilverLog.error("Core Graphics rejected display mode CGError=\(result.rawValue)")
             restore()
             throw DisplayModeError.applyFailed(result.rawValue)
         }
@@ -68,13 +81,29 @@ final class DisplayModeController {
               active.pixelWidth == outputWidth, active.pixelHeight == outputHeight,
               (override.map { abs(active.refreshRate - $0.displayRefreshRate) < 0.01 }
                 ?? exactCadence(active.refreshRate, frameRate: frameRate)) else {
+            SilverLog.error("Active display mode failed resolution/refresh verification")
             restore()
             throw DisplayModeError.verificationFailed
         }
-        if hdr && screen.maximumPotentialExtendedDynamicRangeColorComponentValue <= 1 && override?.force != true {
+        guard let activeScreen = NSScreen.screens.first(where: {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID
+        }) else {
+            SilverLog.error("NSScreen disappeared after display mode switch")
             restore()
-            throw DisplayModeError.hdrUnavailable
+            throw DisplayModeError.noDisplay
         }
+        SilverLog.info("Active mode pixels=\(active.pixelWidth)x\(active.pixelHeight) nominalHz=\(String(format: "%.6f", active.refreshRate)) currentEDR=\(activeScreen.maximumExtendedDynamicRangeColorComponentValue) potentialEDR=\(activeScreen.maximumPotentialExtendedDynamicRangeColorComponentValue) referenceEDR=\(activeScreen.maximumReferenceExtendedDynamicRangeColorComponentValue)")
+        if hdr && activeScreen.maximumPotentialExtendedDynamicRangeColorComponentValue <= 1 {
+            SilverLog.error("HDR verification failed: potentialEDR is not greater than 1")
+            restore()
+            throw DisplayModeError.dynamicRangeMismatch("HDR")
+        }
+        if !hdr && activeScreen.maximumExtendedDynamicRangeColorComponentValue > 1 {
+            SilverLog.error("SDR verification failed: currentEDR is greater than 1")
+            restore()
+            throw DisplayModeError.dynamicRangeMismatch("SDR")
+        }
+        SilverLog.info("Display mode and \(hdr ? "HDR" : "SDR") state verified")
         return override?.label ?? "Automatic exact cadence"
     }
 
@@ -82,6 +111,7 @@ final class DisplayModeController {
         guard let originalMode, let screen = NSScreen.main,
               let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return }
         CGDisplaySetDisplayMode(number.uint32Value, originalMode, nil)
+        SilverLog.info("Restored original display mode \(originalMode.pixelWidth)x\(originalMode.pixelHeight) nominalHz=\(String(format: "%.6f", originalMode.refreshRate))")
         self.originalMode = nil
     }
 
@@ -102,7 +132,8 @@ enum DisplayModeError: LocalizedError {
     case unsupportedByProjector(String)
     case applyFailed(Int32)
     case verificationFailed
-    case hdrUnavailable
+    case dynamicRangeMismatch(String)
+    case displayGrabLost
 
     var errorDescription: String? {
         switch self {
@@ -115,7 +146,9 @@ enum DisplayModeError: LocalizedError {
             "Playback blocked: configured mode \(label) is not supported by the Sony VPL-VW790ES."
         case let .applyFailed(code): "Playback blocked: macOS rejected the required display mode (CGError \(code))."
         case .verificationFailed: "Playback blocked: macOS did not apply the required display mode exactly."
-        case .hdrUnavailable: "Playback blocked: the active display is not currently HDR-capable."
+        case let .dynamicRangeMismatch(range):
+            "Playback blocked: macOS did not activate the required \(range) output state."
+        case .displayGrabLost: "Playback blocked: Silver lost exclusive full-screen control during the mode change."
         }
     }
 }

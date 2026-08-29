@@ -18,8 +18,16 @@ struct HomeCinemaConfiguration: Decodable, Sendable {
 
     static func load() throws -> Self {
         let environment = ProcessInfo.processInfo.environment
-        let path = environment["HOME_CINEMA_CONFIG"] ?? FileManager.default.currentDirectoryPath + "/config.json"
+        let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Silver", isDirectory: true)
+            .appendingPathComponent("config.json")
+            .path
+        let path = environment["HOME_CINEMA_CONFIG"]
+            ?? [applicationSupport, FileManager.default.currentDirectoryPath + "/config.json"]
+                .first(where: { FileManager.default.fileExists(atPath: $0) })
+            ?? applicationSupport
         guard FileManager.default.fileExists(atPath: path) else {
+            SilverLog.error("Configuration missing path=\(path)")
             throw ConfigurationError.missing(path)
         }
         do {
@@ -28,6 +36,7 @@ struct HomeCinemaConfiguration: Decodable, Sendable {
             guard !configuration.jellyfinURL.isEmpty, !configuration.username.isEmpty else {
                 throw ConfigurationError.incomplete
             }
+            SilverLog.info("Loaded configuration path=\(path) outputModes=\(configuration.outputModes.count)")
             return configuration
         } catch let error as ConfigurationError {
             throw error

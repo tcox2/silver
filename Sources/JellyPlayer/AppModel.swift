@@ -6,6 +6,7 @@ import Foundation
 final class AppModel: ObservableObject {
     @Published var hasPlayback = false
     @Published var isHDR = false
+    @Published var configuredOutputModeDescriptions: [String] = []
     let mpv = MPVController()
 
     private(set) var webServer: WebController?
@@ -21,10 +22,16 @@ final class AppModel: ObservableObject {
 
     func start() {
         guard webServer == nil else { return }
+        SilverLog.info("Starting web controller port=8099")
         let server = WebController(model: self)
         webServer = server
         server.start(port: 8099)
         Task { await loadConfiguration() }
+    }
+
+    func webControllerFailed(_ message: String) {
+        SilverLog.error("Cannot own web controller: \(message); terminating")
+        NSApp.terminate(nil)
     }
 
     func loadConfiguration() async {
@@ -43,10 +50,14 @@ final class AppModel: ObservableObject {
             items = try await authenticated.latestItems(userID: session.user.id)
             client = authenticated
             outputModes = configuration.outputModes
+            configuredOutputModeDescriptions = configuration.outputModes.map {
+                "\($0.label) — \($0.displayWidth)×\($0.displayHeight) · \(String(format: "%.3f", $0.displayRefreshRate)) Hz · \($0.mediaDynamicRange.uppercased())"
+            }
             isConfigured = true
+            SilverLog.info("Jellyfin connected; libraryItems=\(items.count) configuredModes=\(outputModes.count)")
         } catch {
             configurationError = error.localizedDescription
-            fputs("Silver cannot access Jellyfin: \(error.localizedDescription)\n", stderr)
+            SilverLog.error("Cannot access Jellyfin: \(error.localizedDescription); terminating")
             NSApp.terminate(nil)
         }
     }
@@ -65,10 +76,12 @@ final class AppModel: ObservableObject {
               let url = client.playbackURL(itemID: item.id, source: source) else {
             throw CinemaError.incompatible
         }
+        SilverLog.info("Playback requested item=\(item.name) source=\(source.id)")
         stop()
         playingItem = item
         playingSource = source
         isHDR = video.isHDR
+        (NSApp.delegate as? CinemaAppDelegate)?.prepareDynamicRange(hdr: video.isHDR)
         do {
             activeOutputLabel = try display.apply(
                 width: video.width,
@@ -78,17 +91,26 @@ final class AppModel: ObservableObject {
                 configuredModes: outputModes
             )
         } catch {
+            SilverLog.error("Playback display preparation failed item=\(item.name) error=\(error.localizedDescription)")
             stop()
             throw error
         }
         hasPlayback = true
+        await Task.yield()
+        guard await (NSApp.delegate as? CinemaAppDelegate)?.verifyDisplayGrabAfterModeChange() == true else {
+            stop()
+            throw DisplayModeError.displayGrabLost
+        }
         try mpv.load(url)
+        SilverLog.info("Playback load issued item=\(item.name)")
     }
 
     func stop() {
+        if let playingItem { SilverLog.info("Stopping playback item=\(playingItem.name)") }
         mpv.stop()
         hasPlayback = false
         isHDR = false
+        (NSApp.delegate as? CinemaAppDelegate)?.prepareDynamicRange(hdr: false)
         display.restore()
         playingItem = nil
         playingSource = nil
@@ -103,8 +125,9 @@ final class AppModel: ObservableObject {
     }
 
     func webStatus() -> WebPlaybackStatus {
+        let currentOutput = currentDisplayOutput()
         guard hasPlayback, let item = playingItem, let source = playingSource else {
-            return WebPlaybackStatus(nowPlaying: nil)
+            return WebPlaybackStatus(currentOutput: currentOutput, nowPlaying: nil)
         }
         let video = source.video
         let current = mpv.number("time-pos") ?? 0
@@ -112,7 +135,7 @@ final class AppModel: ObservableObject {
         let duration = rawDuration.isFinite && rawDuration > 0 ? rawDuration : nil
         let audio = source.mediaStreams.filter { $0.type == "Audio" }.map(\.codec).joined(separator: ", ").uppercased()
         let state = mpv.string("pause") == "yes" ? "paused" : "playing"
-        return WebPlaybackStatus(nowPlaying: WebNowPlaying(
+        return WebPlaybackStatus(currentOutput: currentOutput, nowPlaying: WebNowPlaying(
             id: item.id,
             title: item.name,
             detail: item.subtitle,
@@ -129,6 +152,20 @@ final class AppModel: ObservableObject {
             subtitles: source.subtitle == nil ? "Off" : "SRT",
             outputMode: activeOutputLabel ?? "Unknown"
         ))
+    }
+
+    private func currentDisplayOutput() -> WebDisplayOutput? {
+        guard let screen = NSScreen.main,
+              let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              let mode = CGDisplayCopyDisplayMode(number.uint32Value) else { return nil }
+        return WebDisplayOutput(
+            name: screen.localizedName,
+            width: mode.pixelWidth,
+            height: mode.pixelHeight,
+            refreshRate: mode.refreshRate,
+            dynamicRange: screen.maximumExtendedDynamicRangeColorComponentValue > 1.0 ? "HDR" : "SDR",
+            hdrPotential: screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1.0
+        )
     }
 
 }
@@ -153,7 +190,19 @@ enum CinemaError: LocalizedError {
     var errorDescription: String? { "This item is not AV1 + FLAC + SRT in an Apple-compatible container." }
 }
 
-struct WebPlaybackStatus: Encodable, Sendable { let nowPlaying: WebNowPlaying? }
+struct WebPlaybackStatus: Encodable, Sendable {
+    let currentOutput: WebDisplayOutput?
+    let nowPlaying: WebNowPlaying?
+}
+
+struct WebDisplayOutput: Encodable, Sendable {
+    let name: String
+    let width: Int
+    let height: Int
+    let refreshRate: Double
+    let dynamicRange: String
+    let hdrPotential: Bool
+}
 
 struct WebLibraryResponse: Encodable, Sendable {
     let configured: Bool
