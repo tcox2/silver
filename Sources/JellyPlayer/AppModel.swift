@@ -16,6 +16,7 @@ final class AppModel: ObservableObject {
     private var playingItem: MediaItem?
     private var playingSource: MediaSource?
     private var playingSubtitleLabel = "Off"
+    private var activeSubtitleFile: URL?
     private var activeOutputLabel: String?
     private var isPreparingPlayback = false
     private var playbackDiagnosticsTask: Task<Void, Never>?
@@ -116,8 +117,30 @@ final class AppModel: ObservableObject {
             client.subtitleURL(itemID: item.id, sourceID: source.id, index: $0.index)
         }
         if subtitle != nil, subtitleURL == nil { throw CinemaError.invalidSubtitle }
+        var preparedSubtitleURL: URL?
+        if let subtitle, let subtitleURL {
+            do {
+                SilverLog.info("Downloading selected subtitle before playback item=\(item.name) streamIndex=\(subtitle.index)")
+                let text = try await client.loadText(from: subtitleURL)
+                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw CinemaError.invalidSubtitle
+                }
+                let directory = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("Silver", isDirectory: true)
+                    .appendingPathComponent("Subtitles", isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let file = directory.appendingPathComponent(UUID().uuidString).appendingPathExtension("srt")
+                try text.write(to: file, atomically: true, encoding: .utf8)
+                preparedSubtitleURL = file
+                SilverLog.info("Selected subtitle ready item=\(item.name) streamIndex=\(subtitle.index) bytes=\(text.utf8.count)")
+            } catch {
+                SilverLog.error("Selected subtitle download failed item=\(item.name) streamIndex=\(subtitle.index) error=\(error.localizedDescription)")
+                throw CinemaError.invalidSubtitle
+            }
+        }
         SilverLog.info("Playback requested item=\(item.name) source=\(source.id) subtitle=\(subtitle?.index.description ?? "off")")
         stop()
+        activeSubtitleFile = preparedSubtitleURL
         playingItem = item
         playingSource = source
         playingSubtitleLabel = "Off"
@@ -159,18 +182,10 @@ final class AppModel: ObservableObject {
         }
         try mpv.configureDisplaySync(refreshRate: outputRefreshRate)
         try mpv.load(url)
-        if let subtitle, let subtitleURL {
-            var attached = false
-            for _ in 0..<30 {
-                do {
-                    try mpv.addSubtitle(subtitleURL)
-                    attached = true
-                    break
-                } catch {
-                    try? await Task.sleep(for: .milliseconds(100))
-                }
-            }
-            guard attached else {
+        if let subtitle, let preparedSubtitleURL {
+            do {
+                try mpv.addSubtitle(preparedSubtitleURL)
+            } catch {
                 SilverLog.error("Selected subtitle attachment failed item=\(item.name) streamIndex=\(subtitle.index)")
                 stop()
                 throw CinemaError.invalidSubtitle
@@ -240,6 +255,10 @@ final class AppModel: ObservableObject {
         playbackDiagnosticsTask?.cancel()
         playbackDiagnosticsTask = nil
         mpv.stop()
+        if let activeSubtitleFile {
+            try? FileManager.default.removeItem(at: activeSubtitleFile)
+            self.activeSubtitleFile = nil
+        }
         display.restore()
         isHDR = false
         CinemaAppDelegate.shared?.prepareDynamicRange(hdr: false)
