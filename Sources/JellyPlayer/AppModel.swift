@@ -167,6 +167,18 @@ final class AppModel: ObservableObject {
         mpv.seek(to: target)
     }
 
+    func pause() {
+        guard hasPlayback else { return }
+        SilverLog.info("Pausing playback item=\(playingItem?.name ?? "unknown")")
+        mpv.pause()
+    }
+
+    func resume() {
+        guard hasPlayback else { return }
+        SilverLog.info("Resuming playback item=\(playingItem?.name ?? "unknown")")
+        mpv.resume()
+    }
+
     func webStatus() -> WebPlaybackStatus {
         let currentOutput = currentDisplayOutput()
         guard hasPlayback, let item = playingItem, let source = playingSource else {
