@@ -66,6 +66,12 @@ This wrapper targets the installed Tahoe SDK explicitly. It also works around a
 partial Command Line Tools installation where the default `swift` compiler and
 default SDK symlink have different patch versions.
 
+Every commit pushed to `main` is also built on GitHub's Apple-silicon macOS Tahoe
+runner. The `Silver-macos-arm64` Actions artifact contains an ad-hoc signed
+`Silver.app` and its SHA-256 checksum. The CI bundle loads the media runtime from
+an installed Jellyfin Desktop 2.0.0, as described above; local builds additionally
+embed that installation's runtime dylibs in the bundle.
+
 To start Silver automatically at login after installing `/Applications/Silver.app`:
 
 ```sh

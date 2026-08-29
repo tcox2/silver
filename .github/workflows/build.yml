@@ -1,0 +1,56 @@
+name: Build Silver
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: macOS Tahoe (Apple silicon)
+    runs-on: macos-26
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build Silver
+        shell: zsh {0}
+        run: |
+          set -euo pipefail
+          sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+          mkdir -p .build/ci/Silver.app/Contents/MacOS
+          mkdir -p .build/ci/Silver.app/Contents/Resources
+          xcrun swiftc \
+            -parse-as-library \
+            -sdk "$sdk_path" \
+            -target arm64-apple-macosx26.0 \
+            -o .build/ci/Silver.app/Contents/MacOS/Silver \
+            Sources/JellyPlayer/*.swift
+          cp Resources/Info.plist .build/ci/Silver.app/Contents/Info.plist
+          printf 'APPL????' > .build/ci/Silver.app/Contents/PkgInfo
+          codesign --force --deep --sign - .build/ci/Silver.app
+
+      - name: Verify and package artifact
+        shell: zsh {0}
+        run: |
+          set -euo pipefail
+          file .build/ci/Silver.app/Contents/MacOS/Silver | grep -q 'arm64'
+          codesign --verify --deep --strict .build/ci/Silver.app
+          ditto -c -k --keepParent .build/ci/Silver.app Silver-macos-arm64.zip
+          shasum -a 256 Silver-macos-arm64.zip > Silver-macos-arm64.zip.sha256
+
+      - name: Upload Silver
+        uses: actions/upload-artifact@v4
+        with:
+          name: Silver-macos-arm64
+          path: |
+            Silver-macos-arm64.zip
+            Silver-macos-arm64.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
