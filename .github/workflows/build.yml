@@ -46,7 +46,7 @@ jobs:
           shasum -a 256 Silver-macos-arm64.zip > Silver-macos-arm64.zip.sha256
 
       - name: Upload Silver
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: Silver-macos-arm64
           path: |
