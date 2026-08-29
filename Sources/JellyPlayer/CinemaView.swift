@@ -55,6 +55,7 @@ private struct PlayerSurface: NSViewRepresentable {
         do {
             try controller.attach(to: view)
         } catch {
+            controller.recordAttachmentFailure(error)
             SilverLog.error("Playback engine attachment failed: \(error.localizedDescription)")
         }
         return view

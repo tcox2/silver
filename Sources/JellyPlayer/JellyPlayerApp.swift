@@ -24,9 +24,17 @@ struct SilverApp: App {
 
 @MainActor
 final class CinemaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    static weak var shared: CinemaAppDelegate?
     private var displayGrabAttempts = 0
     private var hasEstablishedDisplayGrab = false
     private var isTerminating = false
+    private var isChangingDisplayMode = false
+    private var cinemaDisplayID: CGDirectDisplayID?
+
+    override init() {
+        super.init()
+        Self.shared = self
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.presentationOptions = [.hideDock, .hideMenuBar, .disableProcessSwitching]
@@ -37,6 +45,7 @@ final class CinemaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
             }
             NSApp.activate(ignoringOtherApps: true)
             window.delegate = self
+            self.cinemaDisplayID = window.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
             window.makeKeyAndOrderFront(nil)
             window.toggleFullScreen(nil)
             NSCursor.hide()
@@ -76,17 +85,18 @@ final class CinemaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     func applicationWillTerminate(_ notification: Notification) {
         isTerminating = true
+        CinemaRestoration.restore?()
         NSCursor.unhide()
     }
 
     func applicationDidResignActive(_ notification: Notification) {
-        if hasEstablishedDisplayGrab && !isTerminating {
+        if hasEstablishedDisplayGrab && !isTerminating && !isChangingDisplayMode {
             failDisplayGrab("another application took control of the cinema display")
         }
     }
 
     func windowDidExitFullScreen(_ notification: Notification) {
-        if hasEstablishedDisplayGrab && !isTerminating {
+        if hasEstablishedDisplayGrab && !isTerminating && !isChangingDisplayMode {
             failDisplayGrab("the cinema window left full screen")
         }
     }
@@ -97,13 +107,32 @@ final class CinemaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         window.contentView?.layer?.preferredDynamicRange = hdr ? .high : .standard
     }
 
+    func beginDisplayModeChange() {
+        isChangingDisplayMode = true
+    }
+
+    func endDisplayModeChange() {
+        isChangingDisplayMode = false
+    }
+
     func verifyDisplayGrabAfterModeChange() async -> Bool {
+        defer { isChangingDisplayMode = false }
         guard let window = NSApp.windows.first else {
             failDisplayGrab("the cinema window disappeared during the mode change")
             return false
         }
         NSApp.activate(ignoringOtherApps: true)
+        if let displayID = cinemaDisplayID,
+           let refreshedScreen = NSScreen.screens.first(where: {
+               ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == displayID
+           }) {
+            window.setFrame(refreshedScreen.frame, display: true)
+        }
         window.makeKeyAndOrderFront(nil)
+        if !window.styleMask.contains(.fullScreen) {
+            SilverLog.warning("Full screen was dropped by the display transition; reacquiring cinema display")
+            window.toggleFullScreen(nil)
+        }
         for _ in 0..<20 {
             if window.screen != nil, window.isVisible, window.isKeyWindow,
                window.styleMask.contains(.fullScreen), NSRunningApplication.current.isActive {
@@ -115,6 +144,11 @@ final class CinemaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         failDisplayGrab("full screen was lost during the display mode change")
         return false
     }
+}
+
+@MainActor
+enum CinemaRestoration {
+    static var restore: (() -> Void)?
 }
 
 private enum StartupDisplayGuard {

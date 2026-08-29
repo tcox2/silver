@@ -2,6 +2,12 @@
 
 A strict macOS Tahoe cinema endpoint controlled from a web browser.
 
+Silver uses one deliberately isolated private Tahoe interface from
+`CoreDisplay.framework` to switch the system HDMI HDR mode for playback. It is
+therefore not Mac App Store compatible and may require maintenance after macOS
+updates. Resolution, refresh-rate, windowing, rendering, and media operation use
+standard macOS APIs.
+
 The Mac has no local library UI. It opens full-screen on a black screen showing
 `home cinema`, and exposes its controller on port **8099**. Jellyfin connection
 details come from `config.json`; the browser contains no credential form.
@@ -52,7 +58,9 @@ even if added to `config.json`.
 Scripts/build.sh
 ```
 
-The executable is written to `.build/direct/Silver`.
+The executable is written to `.build/direct/Silver`. A signed application bundle,
+including the required media-runtime libraries, is written to
+`.build/Silver-build.app.disabled`; rename it to `Silver.app` when installing it.
 
 This wrapper targets the installed Tahoe SDK explicitly. It also works around a
 partial Command Line Tools installation where the default `swift` compiler and
@@ -91,11 +99,17 @@ resolution and refresh rate, macOS current/potential/reference EDR values,
 fullscreen verification, and fail-closed reasons. Credentials, API keys, and
 complete direct-play URLs are never logged.
 
+For HDR playback Silver dynamically resolves CoreDisplay's undocumented
+`SupportsHDRMode`, `IsHDRModeEnabled`, and `SetHDRModeEnabled` functions. It saves
+the original system HDR state, positively verifies every requested transition,
+and restores the original state before revealing the desktop. Missing symbols,
+unsupported output, failed read-back, or incorrect EDR values block playback.
+
 Jellyfin access is mandatory. The app terminates if the configuration is missing
 or invalid, authentication is rejected, the server cannot be reached, or the
 initial library request fails.
 
-The controller's Now Playing panel reports the live AVPlayer time and duration,
+The controller's Now Playing panel reports the live mpv time and duration,
 play state, resolution, frame rate, HDR/SDR mode, video and audio codecs, and SRT
 status. An always-visible Current Output panel reports the active HDMI pixel
 resolution, refresh rate, HDR/SDR state, display name, and HDR capability. Its

@@ -4,6 +4,7 @@ import CoreGraphics
 @MainActor
 final class DisplayModeController {
     private var originalMode: CGDisplayMode?
+    private let privateHDR = PrivateHDRController()
 
     func apply(
         width: Int?,
@@ -85,6 +86,14 @@ final class DisplayModeController {
             restore()
             throw DisplayModeError.verificationFailed
         }
+        do {
+            try privateHDR.apply(displayID: displayID, enabled: hdr)
+        } catch {
+            privateHDR.restore()
+            restoreDisplayModeOnly()
+            throw error
+        }
+        Thread.sleep(forTimeInterval: 0.5)
         guard let activeScreen = NSScreen.screens.first(where: {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID
         }) else {
@@ -108,6 +117,11 @@ final class DisplayModeController {
     }
 
     func restore() {
+        privateHDR.restore()
+        restoreDisplayModeOnly()
+    }
+
+    private func restoreDisplayModeOnly() {
         guard let originalMode, let screen = NSScreen.main,
               let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return }
         CGDisplaySetDisplayMode(number.uint32Value, originalMode, nil)
@@ -134,6 +148,9 @@ enum DisplayModeError: LocalizedError {
     case verificationFailed
     case dynamicRangeMismatch(String)
     case displayGrabLost
+    case privateHDRUnavailable
+    case hdrUnsupported
+    case hdrToggleVerificationFailed
 
     var errorDescription: String? {
         switch self {
@@ -149,6 +166,9 @@ enum DisplayModeError: LocalizedError {
         case let .dynamicRangeMismatch(range):
             "Playback blocked: macOS did not activate the required \(range) output state."
         case .displayGrabLost: "Playback blocked: Silver lost exclusive full-screen control during the mode change."
+        case .privateHDRUnavailable: "Playback blocked: Tahoe's private HDR controls are unavailable."
+        case .hdrUnsupported: "Playback blocked: CoreDisplay reports that the HDMI output does not support HDR mode."
+        case .hdrToggleVerificationFailed: "Playback blocked: CoreDisplay did not confirm the requested HDR setting."
         }
     }
 }

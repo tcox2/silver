@@ -22,6 +22,7 @@ final class AppModel: ObservableObject {
 
     func start() {
         guard webServer == nil else { return }
+        CinemaRestoration.restore = { [weak self] in self?.stop() }
         SilverLog.info("Starting web controller port=8099")
         let server = WebController(model: self)
         webServer = server
@@ -81,7 +82,12 @@ final class AppModel: ObservableObject {
         playingItem = item
         playingSource = source
         isHDR = video.isHDR
-        (NSApp.delegate as? CinemaAppDelegate)?.prepareDynamicRange(hdr: video.isHDR)
+        guard let cinemaDelegate = CinemaAppDelegate.shared else {
+            SilverLog.error("Playback blocked because the cinema application delegate is unavailable")
+            throw DisplayModeError.displayGrabLost
+        }
+        cinemaDelegate.beginDisplayModeChange()
+        cinemaDelegate.prepareDynamicRange(hdr: video.isHDR)
         do {
             activeOutputLabel = try display.apply(
                 width: video.width,
@@ -93,11 +99,17 @@ final class AppModel: ObservableObject {
         } catch {
             SilverLog.error("Playback display preparation failed item=\(item.name) error=\(error.localizedDescription)")
             stop()
+            cinemaDelegate.endDisplayModeChange()
             throw error
         }
         hasPlayback = true
         await Task.yield()
-        guard await (NSApp.delegate as? CinemaAppDelegate)?.verifyDisplayGrabAfterModeChange() == true else {
+        if let error = mpv.attachmentError {
+            stop()
+            cinemaDelegate.endDisplayModeChange()
+            throw error
+        }
+        guard await cinemaDelegate.verifyDisplayGrabAfterModeChange() else {
             stop()
             throw DisplayModeError.displayGrabLost
         }
@@ -108,10 +120,10 @@ final class AppModel: ObservableObject {
     func stop() {
         if let playingItem { SilverLog.info("Stopping playback item=\(playingItem.name)") }
         mpv.stop()
-        hasPlayback = false
-        isHDR = false
-        (NSApp.delegate as? CinemaAppDelegate)?.prepareDynamicRange(hdr: false)
         display.restore()
+        isHDR = false
+        CinemaAppDelegate.shared?.prepareDynamicRange(hdr: false)
+        hasPlayback = false
         playingItem = nil
         playingSource = nil
         activeOutputLabel = nil
@@ -163,7 +175,10 @@ final class AppModel: ObservableObject {
             width: mode.pixelWidth,
             height: mode.pixelHeight,
             refreshRate: mode.refreshRate,
-            dynamicRange: screen.maximumExtendedDynamicRangeColorComponentValue > 1.0 ? "HDR" : "SDR",
+            // Tahoe reports currentEDR == 1.0 even while the external HDR mode is
+            // enabled. `isHDR` is set only after CoreDisplay read-back and EDR
+            // capability verification have both succeeded.
+            dynamicRange: isHDR ? "HDR" : "SDR",
             hdrPotential: screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1.0
         )
     }

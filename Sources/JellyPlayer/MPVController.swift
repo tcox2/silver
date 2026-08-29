@@ -15,15 +15,24 @@ final class MPVController {
     private var handle: OpaquePointer?
     private var pendingURL: URL?
     private var attached = false
+    private(set) var attachmentError: Error?
 
     func attach(to view: NSView) throws {
         guard !attached else { return }
-        let path = "/Applications/Jellyfin Desktop.app/Contents/Frameworks/libmpv.2.dylib"
+        let bundledPath = Bundle.main.privateFrameworksPath.map {
+            URL(fileURLWithPath: $0).appendingPathComponent("libmpv.2.dylib").path
+        }
+        let jellyfinPath = "/Applications/Jellyfin Desktop.app/Contents/Frameworks/libmpv.2.dylib"
+        let path = bundledPath.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil } ?? jellyfinPath
         SilverLog.info("Loading media runtime path=\(path)")
-        guard let library = dlopen(path, RTLD_NOW | RTLD_LOCAL) else { throw MPVError.unavailable }
+        guard let library = dlopen(path, RTLD_NOW | RTLD_LOCAL) else {
+            let detail = dlerror().map { String(cString: $0) } ?? "unknown dyld error"
+            SilverLog.error("Media runtime load failed dyld=\(detail)")
+            throw MPVError.unavailable(detail)
+        }
         self.library = library
         let create: Create = try symbol("mpv_create")
-        guard let handle = create() else { throw MPVError.unavailable }
+        guard let handle = create() else { throw MPVError.unavailable("mpv_create returned nil") }
         self.handle = handle
         let pointer = UInt(bitPattern: Unmanaged.passUnretained(view).toOpaque())
         try option("wid", String(pointer))
@@ -34,6 +43,7 @@ final class MPVController {
         let initialize: Initialize = try symbol("mpv_initialize")
         guard initialize(handle) >= 0 else { throw MPVError.initialization }
         attached = true
+        attachmentError = nil
         SilverLog.info("Media runtime initialized and attached to cinema surface")
         if let pendingURL {
             do { try load(pendingURL); self.pendingURL = nil }
@@ -42,6 +52,10 @@ final class MPVController {
                 throw error
             }
         }
+    }
+
+    func recordAttachmentFailure(_ error: Error) {
+        attachmentError = error
     }
 
     func load(_ url: URL) throws {
@@ -83,7 +97,9 @@ final class MPVController {
     }
 
     private func symbol<T>(_ name: String) throws -> T {
-        guard let library, let pointer = dlsym(library, name) else { throw MPVError.unavailable }
+        guard let library, let pointer = dlsym(library, name) else {
+            throw MPVError.unavailable("missing symbol \(name)")
+        }
         return unsafeBitCast(pointer, to: T.self)
     }
 
@@ -97,10 +113,10 @@ final class MPVController {
 }
 
 enum MPVError: LocalizedError {
-    case unavailable, initialization, command, option(String)
+    case unavailable(String), initialization, command, option(String)
     var errorDescription: String? {
         switch self {
-        case .unavailable: "Jellyfin Desktop's media runtime is unavailable."
+        case let .unavailable(detail): "The bundled media runtime is unavailable: \(detail)"
         case .initialization: "The MKV/AV1 playback engine could not initialize."
         case .command: "The playback engine rejected a command."
         case let .option(name): "The playback engine rejected option \(name)."
