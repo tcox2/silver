@@ -66,6 +66,15 @@ This wrapper targets the installed Tahoe SDK explicitly. It also works around a
 partial Command Line Tools installation where the default `swift` compiler and
 default SDK symlink have different patch versions.
 
+To start Silver automatically at login after installing `/Applications/Silver.app`:
+
+```sh
+./Scripts/install-launch-agent.sh
+```
+
+Silver is a display-owning GUI application, so login is the earliest safe startup
+point; it cannot control the projector before the macOS graphical session exists.
+
 ## Run
 
 Copy `config.example.json` to Silver's Application Support directory, enter the

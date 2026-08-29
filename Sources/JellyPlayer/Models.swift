@@ -91,12 +91,22 @@ struct MediaItem: Codable, Identifiable, Hashable, Sendable {
 
 struct MediaSource: Codable, Hashable, Sendable {
     let id: String
+    let name: String?
+    let path: String?
     let container: String?
+    let size: Int64?
+    let bitrate: Int?
+    let runTimeTicks: Int64?
     let mediaStreams: [MediaStream]
 
     enum CodingKeys: String, CodingKey {
         case id = "Id"
+        case name = "Name"
+        case path = "Path"
         case container = "Container"
+        case size = "Size"
+        case bitrate = "Bitrate"
+        case runTimeTicks = "RunTimeTicks"
         case mediaStreams = "MediaStreams"
     }
 
@@ -123,6 +133,12 @@ struct MediaStream: Codable, Hashable, Sendable {
     let height: Int?
     let averageFrameRate: Double?
     let videoRange: String?
+    let language: String?
+    let displayTitle: String?
+    let title: String?
+    let isDefault: Bool?
+    let isForced: Bool?
+    let isExternal: Bool?
 
     enum CodingKeys: String, CodingKey {
         case codec = "Codec"
@@ -132,6 +148,12 @@ struct MediaStream: Codable, Hashable, Sendable {
         case height = "Height"
         case averageFrameRate = "AverageFrameRate"
         case videoRange = "VideoRange"
+        case language = "Language"
+        case displayTitle = "DisplayTitle"
+        case title = "Title"
+        case isDefault = "IsDefault"
+        case isForced = "IsForced"
+        case isExternal = "IsExternal"
     }
 
     var isHDR: Bool { !(videoRange ?? "SDR").uppercased().contains("SDR") }

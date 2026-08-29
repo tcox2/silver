@@ -79,12 +79,20 @@ final class MPVController {
             return
         }
         SilverLog.info("Sending direct-play URL to media runtime host=\(url.host ?? "unknown")")
+        // Never let libmpv guess a subtitle track. The web UI either supplies
+        // one exact Jellyfin SRT stream or explicitly selects subtitles off.
+        try command(["set", "sid", "no"])
         try command(["loadfile", url.absoluteString, "replace"])
     }
 
+    func addSubtitle(_ url: URL) throws {
+        try command(["sub-add", url.absoluteString, "select"])
+    }
+
     func stop() { try? command(["stop"]) }
-    func pause() { try? command(["set", "pause", "yes"]) }
-    func resume() { try? command(["set", "pause", "no"]) }
+    func setPaused(_ paused: Bool) throws {
+        try command(["set", "pause", paused ? "yes" : "no"])
+    }
     func seek(to seconds: Double) { try? command(["seek", String(seconds), "absolute+exact"]) }
     func string(_ name: String) -> String? {
         guard let handle, let library else { return nil }

@@ -15,6 +15,7 @@ final class AppModel: ObservableObject {
     private let display = DisplayModeController()
     private var playingItem: MediaItem?
     private var playingSource: MediaSource?
+    private var playingSubtitleLabel = "Off"
     private var activeOutputLabel: String?
     private var isPreparingPlayback = false
     private var configurationError: String?
@@ -79,7 +80,14 @@ final class AppModel: ObservableObject {
         )
     }
 
-    func play(itemID: String) async throws {
+    func webItem(itemID: String) throws -> WebItemDetail {
+        guard let item = items.first(where: { $0.id == itemID }) else {
+            throw CinemaError.incompatible
+        }
+        return WebItemDetail(item)
+    }
+
+    func play(itemID: String, subtitleIndex: Int?) async throws {
         guard !isPreparingPlayback else {
             SilverLog.warning("Ignored overlapping playback request itemID=\(itemID)")
             throw CinemaError.busy
@@ -91,10 +99,22 @@ final class AppModel: ObservableObject {
               let url = client.playbackURL(itemID: item.id, source: source) else {
             throw CinemaError.incompatible
         }
-        SilverLog.info("Playback requested item=\(item.name) source=\(source.id)")
+        let subtitle = subtitleIndex.flatMap { requestedIndex in
+            source.mediaStreams.first {
+                $0.type == "Subtitle" && $0.index == requestedIndex &&
+                ["srt", "subrip"].contains($0.codec.lowercased())
+            }
+        }
+        if subtitleIndex != nil, subtitle == nil { throw CinemaError.invalidSubtitle }
+        let subtitleURL = subtitle.flatMap {
+            client.subtitleURL(itemID: item.id, sourceID: source.id, index: $0.index)
+        }
+        if subtitle != nil, subtitleURL == nil { throw CinemaError.invalidSubtitle }
+        SilverLog.info("Playback requested item=\(item.name) source=\(source.id) subtitle=\(subtitle?.index.description ?? "off")")
         stop()
         playingItem = item
         playingSource = source
+        playingSubtitleLabel = "Off"
         isHDR = video.isHDR
         guard let cinemaDelegate = CinemaAppDelegate.shared else {
             SilverLog.error("Playback blocked because the cinema application delegate is unavailable")
@@ -128,6 +148,25 @@ final class AppModel: ObservableObject {
             throw DisplayModeError.displayGrabLost
         }
         try mpv.load(url)
+        if let subtitle, let subtitleURL {
+            var attached = false
+            for _ in 0..<30 {
+                do {
+                    try mpv.addSubtitle(subtitleURL)
+                    attached = true
+                    break
+                } catch {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            }
+            guard attached else {
+                SilverLog.error("Selected subtitle attachment failed item=\(item.name) streamIndex=\(subtitle.index)")
+                stop()
+                throw CinemaError.invalidSubtitle
+            }
+            playingSubtitleLabel = WebSubtitleTrack.label(subtitle)
+            SilverLog.info("Selected subtitle attached item=\(item.name) streamIndex=\(subtitle.index)")
+        }
         SilverLog.info("Playback load issued item=\(item.name)")
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
@@ -157,6 +196,7 @@ final class AppModel: ObservableObject {
         hasPlayback = false
         playingItem = nil
         playingSource = nil
+        playingSubtitleLabel = "Off"
         activeOutputLabel = nil
     }
 
@@ -167,16 +207,16 @@ final class AppModel: ObservableObject {
         mpv.seek(to: target)
     }
 
-    func pause() {
-        guard hasPlayback else { return }
+    func pause() throws {
+        guard hasPlayback else { throw CinemaError.nothingPlaying }
         SilverLog.info("Pausing playback item=\(playingItem?.name ?? "unknown")")
-        mpv.pause()
+        try mpv.setPaused(true)
     }
 
-    func resume() {
-        guard hasPlayback else { return }
+    func resume() throws {
+        guard hasPlayback else { throw CinemaError.nothingPlaying }
         SilverLog.info("Resuming playback item=\(playingItem?.name ?? "unknown")")
-        mpv.resume()
+        try mpv.setPaused(false)
     }
 
     func webStatus() -> WebPlaybackStatus {
@@ -204,7 +244,7 @@ final class AppModel: ObservableObject {
             dynamicRange: video?.isHDR == true ? "HDR" : "SDR",
             videoCodec: video?.codec.uppercased() ?? "AV1",
             audioCodec: audio.isEmpty ? "None" : audio,
-            subtitles: source.subtitle == nil ? "Off" : "SRT",
+            subtitles: playingSubtitleLabel,
             outputMode: activeOutputLabel ?? "Unknown"
         ))
     }
@@ -243,14 +283,98 @@ struct WebMediaItem: Encodable, Sendable {
     }
 }
 
+struct WebItemDetail: Encodable, Sendable {
+    let id: String
+    let name: String
+    let detail: String
+    let compatible: Bool
+    let incompatibilityReason: String?
+    let overview: String?
+    let file: WebFileInfo?
+    let subtitles: [WebSubtitleTrack]
+
+    init(_ item: MediaItem) {
+        id = item.id
+        name = item.name
+        detail = item.subtitle
+        compatible = item.strictSource != nil
+        incompatibilityReason = item.incompatibilityReason
+        overview = item.overview
+        let source = item.strictSource ?? item.mediaSources?.first
+        file = source.map(WebFileInfo.init)
+        subtitles = source?.mediaStreams.filter {
+            $0.type == "Subtitle" && ["srt", "subrip"].contains($0.codec.lowercased())
+        }.map(WebSubtitleTrack.init) ?? []
+    }
+}
+
 enum CinemaError: LocalizedError {
     case incompatible
     case busy
+    case nothingPlaying
+    case invalidSubtitle
     var errorDescription: String? {
         switch self {
         case .incompatible: "This item is not AV1 + FLAC + SRT in a supported direct-play container."
         case .busy: "Silver is already preparing another playback request."
+        case .nothingPlaying: "Nothing is currently playing."
+        case .invalidSubtitle: "The selected SRT subtitle track is unavailable."
         }
+    }
+}
+
+struct WebFileInfo: Encodable, Sendable {
+    let name: String
+    let container: String
+    let size: Int64?
+    let bitrate: Int?
+    let duration: Double?
+    let videoCodec: String
+    let width: Int?
+    let height: Int?
+    let frameRate: Double?
+    let dynamicRange: String
+    let audio: [String]
+
+    init(_ source: MediaSource) {
+        name = source.path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? source.name ?? "Unknown"
+        container = source.container?.uppercased() ?? "Unknown"
+        size = source.size
+        bitrate = source.bitrate
+        duration = source.runTimeTicks.map { Double($0) / 10_000_000 }
+        videoCodec = source.video?.codec.uppercased() ?? "Unknown"
+        width = source.video?.width
+        height = source.video?.height
+        frameRate = source.video?.averageFrameRate
+        dynamicRange = source.video?.isHDR == true ? "HDR" : "SDR"
+        audio = source.mediaStreams.filter { $0.type == "Audio" }.map {
+            [$0.codec.uppercased(), $0.language, $0.displayTitle ?? $0.title].compactMap { $0 }.joined(separator: " · ")
+        }
+    }
+}
+
+struct WebSubtitleTrack: Encodable, Sendable {
+    let index: Int
+    let label: String
+    let language: String?
+    let isDefault: Bool
+    let isForced: Bool
+    let isExternal: Bool
+
+    init(_ stream: MediaStream) {
+        index = stream.index
+        label = Self.label(stream)
+        language = stream.language
+        isDefault = stream.isDefault == true
+        isForced = stream.isForced == true
+        isExternal = stream.isExternal == true
+    }
+
+    static func label(_ stream: MediaStream) -> String {
+        var parts = [stream.displayTitle ?? stream.title ?? stream.language ?? "SRT"]
+        if stream.isForced == true { parts.append("Forced") }
+        else if stream.isDefault == true { parts.append("Default") }
+        return parts.joined(separator: " · ")
     }
 }
 
