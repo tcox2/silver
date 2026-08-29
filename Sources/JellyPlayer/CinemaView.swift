@@ -7,10 +7,9 @@ struct CinemaView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if model.hasPlayback {
-                PlayerSurface(controller: model.mpv, hdr: model.isHDR)
-                    .ignoresSafeArea()
-            } else {
+            PlayerSurface(controller: model.mpv, hdr: model.isHDR)
+                .ignoresSafeArea()
+            if !model.hasPlayback {
                 VStack(spacing: 18) {
                     Text("home cinema")
                         .font(.system(size: 68, weight: .light, design: .rounded))

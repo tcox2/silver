@@ -16,6 +16,7 @@ final class AppModel: ObservableObject {
     private var playingItem: MediaItem?
     private var playingSource: MediaSource?
     private var activeOutputLabel: String?
+    private var isPreparingPlayback = false
     private var configurationError: String?
     private var isConfigured = false
     private var outputModes: [ConfiguredOutputMode] = []
@@ -23,6 +24,13 @@ final class AppModel: ObservableObject {
     func start() {
         guard webServer == nil else { return }
         CinemaRestoration.restore = { [weak self] in self?.stop() }
+        do {
+            try display.ensureIdleSDR()
+        } catch {
+            SilverLog.error("Cannot establish idle SDR output: \(error.localizedDescription); terminating")
+            NSApp.terminate(nil)
+            return
+        }
         SilverLog.info("Starting web controller port=8099")
         let server = WebController(model: self)
         webServer = server
@@ -72,6 +80,12 @@ final class AppModel: ObservableObject {
     }
 
     func play(itemID: String) async throws {
+        guard !isPreparingPlayback else {
+            SilverLog.warning("Ignored overlapping playback request itemID=\(itemID)")
+            throw CinemaError.busy
+        }
+        isPreparingPlayback = true
+        defer { isPreparingPlayback = false }
         guard let client, let item = items.first(where: { $0.id == itemID }),
               let source = item.strictSource, let video = source.video,
               let url = client.playbackURL(itemID: item.id, source: source) else {
@@ -115,6 +129,16 @@ final class AppModel: ObservableObject {
         }
         try mpv.load(url)
         SilverLog.info("Playback load issued item=\(item.name)")
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, self.hasPlayback else { return }
+            SilverLog.info(
+                "Playback diagnostics time=\(self.mpv.string("time-pos") ?? "nil") " +
+                "videoFormat=\(self.mpv.string("video-format") ?? "nil") " +
+                "voConfigured=\(self.mpv.string("vo-configured") ?? "nil") " +
+                "pausedForCache=\(self.mpv.string("paused-for-cache") ?? "nil")"
+            )
+        }
     }
 
     func stop() {
@@ -202,7 +226,13 @@ struct WebMediaItem: Encodable, Sendable {
 
 enum CinemaError: LocalizedError {
     case incompatible
-    var errorDescription: String? { "This item is not AV1 + FLAC + SRT in an Apple-compatible container." }
+    case busy
+    var errorDescription: String? {
+        switch self {
+        case .incompatible: "This item is not AV1 + FLAC + SRT in a supported direct-play container."
+        case .busy: "Silver is already preparing another playback request."
+        }
+    }
 }
 
 struct WebPlaybackStatus: Encodable, Sendable {

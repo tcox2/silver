@@ -53,6 +53,31 @@ final class PrivateHDRController {
         throw DisplayModeError.hdrToggleVerificationFailed
     }
 
+    /// Recovers the projector to an SDR idle state after an abnormal exit. This
+    /// deliberately does not record the inherited HDR state for later restore.
+    func ensureDisabled(displayID: CGDirectDisplayID) throws {
+        guard let supports, let isEnabled, let setEnabled else {
+            throw DisplayModeError.privateHDRUnavailable
+        }
+        let supported = supports(displayID) != 0
+        let before = isEnabled(displayID) != 0
+        SilverLog.info("Idle SDR recovery displayID=\(displayID) supported=\(supported) enabledBefore=\(before)")
+        guard before else {
+            SilverLog.info("Idle SDR state verified enabled=false")
+            return
+        }
+        setEnabled(displayID, 0)
+        for _ in 0..<30 {
+            if isEnabled(displayID) == 0 {
+                SilverLog.info("Idle SDR state recovered enabled=false")
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        SilverLog.error("Idle SDR recovery failed")
+        throw DisplayModeError.hdrToggleVerificationFailed
+    }
+
     func restore() {
         guard let original else { return }
         defer { self.original = nil }

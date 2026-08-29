@@ -37,7 +37,7 @@ final class CinemaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.presentationOptions = [.hideDock, .hideMenuBar, .disableProcessSwitching]
+        NSApp.presentationOptions = [.hideDock, .hideMenuBar]
         DispatchQueue.main.async {
             guard let window = NSApp.windows.first, window.screen != nil else {
                 self.failDisplayGrab("no window is attached to a display")
@@ -87,12 +87,6 @@ final class CinemaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate
         isTerminating = true
         CinemaRestoration.restore?()
         NSCursor.unhide()
-    }
-
-    func applicationDidResignActive(_ notification: Notification) {
-        if hasEstablishedDisplayGrab && !isTerminating && !isChangingDisplayMode {
-            failDisplayGrab("another application took control of the cinema display")
-        }
     }
 
     func windowDidExitFullScreen(_ notification: Notification) {
