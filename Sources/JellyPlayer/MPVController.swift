@@ -114,6 +114,16 @@ final class MPVController {
         SilverLog.info("mpv display clock override configured refreshRate=\(String(format: "%.9f", refreshRate))")
     }
     func seek(to seconds: Double) { try? command(["seek", String(seconds), "absolute+exact"]) }
+    func prebufferSample() -> PlaybackPrebufferSample {
+        PlaybackPrebufferSample(
+            videoOutputConfigured: string("vo-configured") == "yes",
+            videoFormatAvailable: string("video-format") != nil,
+            decodedFrameRate: number("estimated-vf-fps"),
+            position: number("time-pos"),
+            demuxedSeconds: number("demuxer-cache-duration"),
+            reachedEndOfFile: string("eof-reached") == "yes"
+        )
+    }
     func string(_ name: String) -> String? {
         guard let handle, let library else { return nil }
         let get = unsafeBitCast(dlsym(library, "mpv_get_property_string"), to: GetString.self)
@@ -411,7 +421,7 @@ final class MPVOpenGLView: NSOpenGLView {
 }
 
 enum MPVError: LocalizedError {
-    case unavailable(String), initialization, renderContext, command, option(String), displaySynchronization
+    case unavailable(String), initialization, renderContext, command, option(String), displaySynchronization, videoPrebuffer
     var errorDescription: String? {
         switch self {
         case let .unavailable(detail): "The bundled media runtime is unavailable: \(detail)"
@@ -420,6 +430,7 @@ enum MPVError: LocalizedError {
         case .command: "The playback engine rejected a command."
         case let .option(name): "The playback engine rejected option \(name)."
         case .displaySynchronization: "Playback stopped because mpv could not synchronize to the verified display clock."
+        case .videoPrebuffer: "Playback stopped because mpv could not prebuffer decoded video safely."
         }
     }
 }

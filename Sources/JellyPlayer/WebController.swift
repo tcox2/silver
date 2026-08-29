@@ -72,7 +72,8 @@ final class WebController: @unchecked Sendable {
             case ("POST", "/api/seek"):
                 let command = try JSONDecoder().decode(SeekCommand.self, from: request.body)
                 SilverLog.info("Web command seek seconds=\(String(format: "%.3f", command.seconds))")
-                await model?.seek(to: command.seconds)
+                guard let model else { throw CinemaError.incompatible }
+                try await model.seek(to: command.seconds)
                 sendJSON(["ok": true], to: connection)
             default:
                 send(status: 404, body: "Not found", to: connection)

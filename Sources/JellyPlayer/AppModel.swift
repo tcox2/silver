@@ -19,6 +19,7 @@ final class AppModel: ObservableObject {
     private var activeSubtitleFile: URL?
     private var activeOutputLabel: String?
     private var isPreparingPlayback = false
+    private var isPrebuffering = false
     private var playbackDiagnosticsTask: Task<Void, Never>?
     private var configurationError: String?
     private var isConfigured = false
@@ -181,6 +182,9 @@ final class AppModel: ObservableObject {
             throw MPVError.displaySynchronization
         }
         try mpv.configureDisplaySync(refreshRate: outputRefreshRate)
+        // Hold audio until mpv has configured video output, decoded the first
+        // frame, and accumulated input headroom after the HDMI mode change.
+        try mpv.setPaused(true)
         try mpv.load(url)
         if let subtitle, let preparedSubtitleURL {
             do {
@@ -193,7 +197,16 @@ final class AppModel: ObservableObject {
             playingSubtitleLabel = WebSubtitleTrack.label(subtitle)
             SilverLog.info("Selected subtitle attached item=\(item.name) streamIndex=\(subtitle.index)")
         }
-        SilverLog.info("Playback load issued item=\(item.name)")
+        SilverLog.info("Playback load issued item=\(item.name); holding audio for decoded-video prebuffer")
+        do {
+            try await waitForDecodedVideo(reason: "startup", expectedPosition: nil)
+            try mpv.setPaused(false)
+            SilverLog.info("Decoded-video prebuffer released item=\(item.name) reason=startup")
+        } catch {
+            SilverLog.error("Playback prebuffer failed item=\(item.name) error=\(error.localizedDescription)")
+            stop()
+            throw error
+        }
         playbackDiagnosticsTask?.cancel()
         playbackDiagnosticsTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(3))
@@ -267,13 +280,27 @@ final class AppModel: ObservableObject {
         playingSource = nil
         playingSubtitleLabel = "Off"
         activeOutputLabel = nil
+        isPrebuffering = false
     }
 
-    func seek(to seconds: Double) {
+    func seek(to seconds: Double) async throws {
+        guard hasPlayback else { throw CinemaError.nothingPlaying }
         guard seconds.isFinite else { return }
         let duration = mpv.number("duration") ?? 0
         let target = max(0, duration.isFinite && duration > 0 ? min(seconds, duration) : seconds)
+        let wasPaused = mpv.string("pause") == "yes"
+        try mpv.setPaused(true)
+        SilverLog.info("Holding audio for decoded-video prebuffer reason=seek target=\(String(format: "%.3f", target))")
         mpv.seek(to: target)
+        do {
+            try await waitForDecodedVideo(reason: "seek", expectedPosition: target)
+            if !wasPaused { try mpv.setPaused(false) }
+            SilverLog.info("Decoded-video prebuffer released item=\(playingItem?.name ?? "unknown") reason=seek target=\(String(format: "%.3f", target)) resume=\(!wasPaused)")
+        } catch {
+            SilverLog.error("Seek prebuffer failed item=\(playingItem?.name ?? "unknown") target=\(String(format: "%.3f", target)) error=\(error.localizedDescription)")
+            stop()
+            throw error
+        }
     }
 
     func pause() throws {
@@ -284,6 +311,7 @@ final class AppModel: ObservableObject {
 
     func resume() throws {
         guard hasPlayback else { throw CinemaError.nothingPlaying }
+        guard !isPrebuffering else { throw CinemaError.busy }
         SilverLog.info("Resuming playback item=\(playingItem?.name ?? "unknown")")
         try mpv.setPaused(false)
     }
@@ -298,7 +326,7 @@ final class AppModel: ObservableObject {
         let rawDuration = mpv.number("duration") ?? 0
         let duration = rawDuration.isFinite && rawDuration > 0 ? rawDuration : nil
         let audio = source.mediaStreams.filter { $0.type == "Audio" }.map(\.codec).joined(separator: ", ").uppercased()
-        let state = mpv.string("pause") == "yes" ? "paused" : "playing"
+        let state = isPrebuffering ? "prebuffering" : (mpv.string("pause") == "yes" ? "paused" : "playing")
         return WebPlaybackStatus(currentOutput: currentOutput, nowPlaying: WebNowPlaying(
             id: item.id,
             title: item.name,
@@ -333,6 +361,39 @@ final class AppModel: ObservableObject {
             dynamicRange: isHDR ? "HDR" : "SDR",
             hdrPotential: screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1.0
         )
+    }
+
+    private func waitForDecodedVideo(reason: String, expectedPosition: Double?) async throws {
+        isPrebuffering = true
+        defer { isPrebuffering = false }
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(15))
+        var lastSample = mpv.prebufferSample()
+        while clock.now < deadline {
+            guard hasPlayback else { throw MPVError.videoPrebuffer }
+            lastSample = mpv.prebufferSample()
+            if lastSample.isReady(expectedPosition: expectedPosition, minimumDemuxedSeconds: 3) {
+                // Reject a transient property update: readiness must survive
+                // more than two frames of the 24 Hz output clock.
+                try await Task.sleep(for: .milliseconds(100))
+                let confirmed = mpv.prebufferSample()
+                if confirmed.isReady(expectedPosition: expectedPosition, minimumDemuxedSeconds: 3) {
+                    SilverLog.info(
+                        "Decoded-video prebuffer ready reason=\(reason) " +
+                        "position=\(confirmed.position.map { String(format: "%.3f", $0) } ?? "nil") " +
+                        "decodedFPS=\(confirmed.decodedFrameRate.map { String(format: "%.6f", $0) } ?? "nil") " +
+                        "demuxedSeconds=\(confirmed.demuxedSeconds.map { String(format: "%.3f", $0) } ?? "nil")"
+                    )
+                    return
+                }
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let position = lastSample.position.map { String(format: "%.3f", $0) } ?? "nil"
+        let decodedFPS = lastSample.decodedFrameRate.map { String(format: "%.6f", $0) } ?? "nil"
+        let demuxedSeconds = lastSample.demuxedSeconds.map { String(format: "%.3f", $0) } ?? "nil"
+        SilverLog.error("Decoded-video prebuffer timed out reason=\(reason) voConfigured=\(lastSample.videoOutputConfigured) videoFormat=\(lastSample.videoFormatAvailable) position=\(position) decodedFPS=\(decodedFPS) demuxedSeconds=\(demuxedSeconds)")
+        throw MPVError.videoPrebuffer
     }
 
 }

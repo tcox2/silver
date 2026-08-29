@@ -129,3 +129,9 @@ play state, resolution, frame rate, HDR/SDR mode, video and audio codecs, and SR
 status. An always-visible Current Output panel reports the active HDMI pixel
 resolution, refresh rate, HDR/SDR state, display name, and HDR capability. Its
 timeline seeks the direct-play stream without requesting a transcode.
+
+Silver holds playback paused after every HDMI mode change and exact seek until
+mpv has configured video output, decoded a frame at the requested timestamp, and
+buffered at least three seconds of demuxed input. Audio and video are then
+released together. A prebuffer that cannot satisfy those conditions within 15
+seconds fails closed instead of starting with an uncontrolled lip-sync offset.
