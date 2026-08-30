@@ -29,6 +29,12 @@ struct JellyfinClient: Sendable {
     }
 
     func catalogPage(userID: String, searchTerm: String, startIndex: Int, limit: Int) async throws -> JellyfinItemsResponse {
+        if !searchTerm.isEmpty {
+            let series = try await matchingSeries(userID: userID, searchTerm: searchTerm)
+            if !series.isEmpty {
+                return try await episodePage(userID: userID, series: series, startIndex: startIndex, limit: limit)
+            }
+        }
         var query = [
             URLQueryItem(name: "UserId", value: userID),
             URLQueryItem(name: "IncludeItemTypes", value: "Movie,Episode"),
@@ -40,7 +46,69 @@ struct JellyfinClient: Sendable {
             URLQueryItem(name: "Fields", value: "MediaSources")
         ]
         if !searchTerm.isEmpty { query.append(URLQueryItem(name: "SearchTerm", value: searchTerm)) }
-        return try await send(request(path: "/Items", query: query), as: JellyfinItemsResponse.self)
+        let page = try await send(request(path: "/Items", query: query), as: JellyfinItemsResponse.self)
+        let reportedTotal = page.totalRecordCount ?? (startIndex + page.items.count)
+        let verifiedTotal = page.items.count < limit ? min(reportedTotal, startIndex + page.items.count) : reportedTotal
+        return JellyfinItemsResponse(items: page.items, totalRecordCount: verifiedTotal)
+    }
+
+    private func matchingSeries(userID: String, searchTerm: String) async throws -> [MediaItem] {
+        let query = [
+            URLQueryItem(name: "UserId", value: userID),
+            URLQueryItem(name: "IncludeItemTypes", value: "Series"),
+            URLQueryItem(name: "Recursive", value: "true"),
+            URLQueryItem(name: "SearchTerm", value: searchTerm),
+            URLQueryItem(name: "SortBy", value: "SortName"),
+            URLQueryItem(name: "SortOrder", value: "Ascending"),
+            URLQueryItem(name: "Limit", value: "20")
+        ]
+        return try await send(request(path: "/Items", query: query), as: JellyfinItemsResponse.self).items
+    }
+
+    private func episodePage(
+        userID: String,
+        series: [MediaItem],
+        startIndex: Int,
+        limit: Int
+    ) async throws -> JellyfinItemsResponse {
+        var counts: [(id: String, count: Int)] = []
+        for show in series {
+            let countPage = try await seriesEpisodes(userID: userID, seriesID: show.id, startIndex: 0, limit: 1)
+            counts.append((show.id, countPage.totalRecordCount ?? countPage.items.count))
+        }
+        let total = counts.reduce(0) { $0 + $1.count }
+        var remainingOffset = startIndex
+        var remainingLimit = limit
+        var items: [MediaItem] = []
+        for show in counts where remainingLimit > 0 {
+            if remainingOffset >= show.count {
+                remainingOffset -= show.count
+                continue
+            }
+            let page = try await seriesEpisodes(
+                userID: userID,
+                seriesID: show.id,
+                startIndex: remainingOffset,
+                limit: remainingLimit
+            )
+            items.append(contentsOf: page.items)
+            remainingLimit -= page.items.count
+            remainingOffset = 0
+        }
+        return JellyfinItemsResponse(items: items, totalRecordCount: total)
+    }
+
+    private func seriesEpisodes(userID: String, seriesID: String, startIndex: Int, limit: Int) async throws -> JellyfinItemsResponse {
+        let query = [
+            URLQueryItem(name: "UserId", value: userID),
+            URLQueryItem(name: "StartIndex", value: String(startIndex)),
+            URLQueryItem(name: "Limit", value: String(limit)),
+            URLQueryItem(name: "Fields", value: "MediaSources")
+        ]
+        return try await send(
+            request(path: "/Shows/\(seriesID)/Episodes", query: query),
+            as: JellyfinItemsResponse.self
+        )
     }
 
     func item(userID: String, itemID: String) async throws -> MediaItem {

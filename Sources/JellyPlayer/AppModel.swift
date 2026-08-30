@@ -111,6 +111,7 @@ final class AppModel: ObservableObject {
             offset: safeOffset,
             limit: safeLimit,
             total: page.totalRecordCount ?? (safeOffset + page.items.count),
+            hasMore: safeOffset + page.items.count < (page.totalRecordCount ?? (safeOffset + page.items.count)),
             items: page.items.map(WebMediaItem.init)
         )
     }
@@ -586,6 +587,7 @@ struct WebLibraryPageResponse: Encodable, Sendable {
     let offset: Int
     let limit: Int
     let total: Int
+    let hasMore: Bool
     let items: [WebMediaItem]
 }
 
