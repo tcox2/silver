@@ -32,12 +32,34 @@ struct JellyfinClient: Sendable {
         if !searchTerm.isEmpty {
             let series = try await matchingSeries(userID: userID, searchTerm: searchTerm)
             if !series.isEmpty {
-                return try await episodePage(userID: userID, series: series, startIndex: startIndex, limit: limit)
+                return try await combinedSearchPage(
+                    userID: userID,
+                    searchTerm: searchTerm,
+                    series: series,
+                    startIndex: startIndex,
+                    limit: limit
+                )
             }
         }
+        return try await itemPage(
+            userID: userID,
+            includeItemTypes: "Movie,Episode",
+            searchTerm: searchTerm,
+            startIndex: startIndex,
+            limit: limit
+        )
+    }
+
+    private func itemPage(
+        userID: String,
+        includeItemTypes: String,
+        searchTerm: String,
+        startIndex: Int,
+        limit: Int
+    ) async throws -> JellyfinItemsResponse {
         var query = [
             URLQueryItem(name: "UserId", value: userID),
-            URLQueryItem(name: "IncludeItemTypes", value: "Movie,Episode"),
+            URLQueryItem(name: "IncludeItemTypes", value: includeItemTypes),
             URLQueryItem(name: "Recursive", value: "true"),
             URLQueryItem(name: "SortBy", value: "SortName"),
             URLQueryItem(name: "SortOrder", value: "Ascending"),
@@ -50,6 +72,48 @@ struct JellyfinClient: Sendable {
         let reportedTotal = page.totalRecordCount ?? (startIndex + page.items.count)
         let verifiedTotal = page.items.count < limit ? min(reportedTotal, startIndex + page.items.count) : reportedTotal
         return JellyfinItemsResponse(items: page.items, totalRecordCount: verifiedTotal)
+    }
+
+    private func combinedSearchPage(
+        userID: String,
+        searchTerm: String,
+        series: [MediaItem],
+        startIndex: Int,
+        limit: Int
+    ) async throws -> JellyfinItemsResponse {
+        let movieCountPage = try await itemPage(
+            userID: userID,
+            includeItemTypes: "Movie",
+            searchTerm: searchTerm,
+            startIndex: 0,
+            limit: 1
+        )
+        let movieTotal = movieCountPage.totalRecordCount ?? movieCountPage.items.count
+        var items: [MediaItem] = []
+        var remaining = limit
+        if startIndex < movieTotal, remaining > 0 {
+            let movies = try await itemPage(
+                userID: userID,
+                includeItemTypes: "Movie",
+                searchTerm: searchTerm,
+                startIndex: startIndex,
+                limit: remaining
+            )
+            items.append(contentsOf: movies.items)
+            remaining -= movies.items.count
+        }
+        let episodeOffset = max(0, startIndex - movieTotal)
+        let episodes = try await episodePage(
+            userID: userID,
+            series: series,
+            startIndex: episodeOffset,
+            limit: remaining
+        )
+        items.append(contentsOf: episodes.items)
+        return JellyfinItemsResponse(
+            items: items,
+            totalRecordCount: movieTotal + (episodes.totalRecordCount ?? episodes.items.count)
+        )
     }
 
     private func matchingSeries(userID: String, searchTerm: String) async throws -> [MediaItem] {
