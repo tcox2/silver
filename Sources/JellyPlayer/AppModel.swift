@@ -141,10 +141,20 @@ final class AppModel: ObservableObject {
             }
         }
         if subtitleIndex != nil, subtitle == nil { throw CinemaError.invalidSubtitle }
-        let subtitleURL = subtitle.flatMap {
-            client.subtitleURL(itemID: item.id, sourceID: source.id, index: $0.index)
+        let subtitleURL: URL? = subtitle.flatMap {
+            guard $0.isExternal == true else { return nil }
+            return client.subtitleURL(itemID: item.id, sourceID: source.id, index: $0.index)
         }
-        if subtitle != nil, subtitleURL == nil { throw CinemaError.invalidSubtitle }
+        let embeddedSubtitleOrdinal = subtitle.flatMap { selected -> Int? in
+            guard selected.isExternal != true else { return nil }
+            let embedded = source.mediaStreams.filter {
+                $0.type == "Subtitle" && $0.isExternal != true
+            }
+            guard let position = embedded.firstIndex(where: { $0.index == selected.index }) else { return nil }
+            return position + 1
+        }
+        if let subtitle, subtitle.isExternal == true, subtitleURL == nil { throw CinemaError.invalidSubtitle }
+        if let subtitle, subtitle.isExternal != true, embeddedSubtitleOrdinal == nil { throw CinemaError.invalidSubtitle }
         var preparedSubtitleURL: URL?
         if let subtitle, let subtitleURL {
             do {
@@ -221,7 +231,17 @@ final class AppModel: ObservableObject {
         // frame, and accumulated input headroom after the HDMI mode change.
         try mpv.setPaused(true)
         try mpv.load(url)
-        if let subtitle, let preparedSubtitleURL {
+        if let subtitle, let embeddedSubtitleOrdinal {
+            do {
+                try mpv.selectEmbeddedSubtitle(embeddedSubtitleOrdinal)
+            } catch {
+                SilverLog.error("Embedded subtitle selection failed item=\(item.name) streamIndex=\(subtitle.index) ordinal=\(embeddedSubtitleOrdinal)")
+                stop()
+                throw CinemaError.invalidSubtitle
+            }
+            playingSubtitleLabel = WebSubtitleTrack.label(subtitle)
+            SilverLog.info("Embedded subtitle selected item=\(item.name) streamIndex=\(subtitle.index) ordinal=\(embeddedSubtitleOrdinal)")
+        } else if let subtitle, let preparedSubtitleURL {
             do {
                 try mpv.addSubtitle(preparedSubtitleURL)
             } catch {

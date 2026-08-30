@@ -110,6 +110,13 @@ final class MPVController {
         try command(["sub-add", url.absoluteString, "select"])
     }
 
+    func selectEmbeddedSubtitle(_ ordinal: Int) throws {
+        // mpv numbers subtitle tracks independently from FFmpeg's absolute
+        // stream indexes. Jellyfin preserves container order, so convert the
+        // selected embedded subtitle to its one-based subtitle-track ordinal.
+        try command(["set", "sid", String(ordinal)])
+    }
+
     func stop() { try? command(["stop"]) }
     func setPaused(_ paused: Bool) throws {
         try command(["set", "pause", paused ? "yes" : "no"])
