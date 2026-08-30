@@ -28,32 +28,29 @@ struct JellyfinClient: Sendable {
         return try await send(request, as: JellyfinSession.self)
     }
 
-    func catalogItems(
-        userID: String,
-        progress: @MainActor @Sendable (Int, Int?) -> Void = { _, _ in }
-    ) async throws -> [MediaItem] {
-        let pageSize = 500
-        var startIndex = 0
-        var catalog: [MediaItem] = []
-        while true {
-            let query = [
-                URLQueryItem(name: "UserId", value: userID),
-                URLQueryItem(name: "IncludeItemTypes", value: "Movie,Episode"),
-                URLQueryItem(name: "Recursive", value: "true"),
-                URLQueryItem(name: "SortBy", value: "SortName"),
-                URLQueryItem(name: "SortOrder", value: "Ascending"),
-                URLQueryItem(name: "StartIndex", value: String(startIndex)),
-                URLQueryItem(name: "Limit", value: String(pageSize)),
-                URLQueryItem(name: "Fields", value: "Overview,MediaSources")
-            ]
-            let response = try await send(request(path: "/Items", query: query), as: JellyfinItemsResponse.self)
-            catalog.append(contentsOf: response.items)
-            startIndex += response.items.count
-            await progress(startIndex, response.totalRecordCount)
-            if response.items.isEmpty || response.items.count < pageSize ||
-                response.totalRecordCount.map({ startIndex >= $0 }) == true { break }
-        }
-        return catalog
+    func catalogPage(userID: String, searchTerm: String, startIndex: Int, limit: Int) async throws -> JellyfinItemsResponse {
+        var query = [
+            URLQueryItem(name: "UserId", value: userID),
+            URLQueryItem(name: "IncludeItemTypes", value: "Movie,Episode"),
+            URLQueryItem(name: "Recursive", value: "true"),
+            URLQueryItem(name: "SortBy", value: "SortName"),
+            URLQueryItem(name: "SortOrder", value: "Ascending"),
+            URLQueryItem(name: "StartIndex", value: String(startIndex)),
+            URLQueryItem(name: "Limit", value: String(limit)),
+            URLQueryItem(name: "Fields", value: "MediaSources")
+        ]
+        if !searchTerm.isEmpty { query.append(URLQueryItem(name: "SearchTerm", value: searchTerm)) }
+        return try await send(request(path: "/Items", query: query), as: JellyfinItemsResponse.self)
+    }
+
+    func item(userID: String, itemID: String) async throws -> MediaItem {
+        try await send(
+            request(
+                path: "/Users/\(userID)/Items/\(itemID)",
+                query: [URLQueryItem(name: "Fields", value: "Overview,MediaSources")]
+            ),
+            as: MediaItem.self
+        )
     }
 
     func playbackURL(itemID: String, source: MediaSource) -> URL? {

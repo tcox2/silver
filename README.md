@@ -124,18 +124,16 @@ Jellyfin access is mandatory. The app terminates if the configuration is missing
 or invalid, authentication is rejected, the server cannot be reached, or the
 initial library request fails.
 
-At startup Silver waits for the complete paginated Jellyfin catalogue before it
-becomes ready or displays its configured projector modes. Both the cinema screen
-and web controller show live item-count progress while this initial load runs.
-The Library tab keeps a browser-side copy of the last complete catalogue for
-fast display while Silver starts.
+At startup Silver authenticates with Jellyfin but does not download or retain its
+catalogue. The idle projector screen shows only the `home cinema` title and web
+controller URL; it does not enumerate output modes or catalogue-derived counts.
 
-While Silver remains running, it reloads the entire Jellyfin catalogue every 24
-hours. Refreshes are atomic: the existing in-memory catalogue stays available
-until the replacement has loaded completely, and a failed refresh leaves it
-unchanged. The Library tab's **Reload now** button starts the same operation on
-demand and shows its live progress. The browser downloads the large compressed
-catalogue response only when a completed refresh changes its revision.
+Library requests are proxied directly from the web controller to Jellyfin using
+Jellyfin's `StartIndex`, `Limit`, and `SearchTerm` parameters. The browser requests
+at most 100 summary records per page and loads additional pages only on demand.
+Selecting an item makes a separate Jellyfin request for its full media details.
+Neither Silver nor the browser downloads the complete catalogue. **Reload now**
+simply fetches the current search page from Jellyfin again.
 
 The controller's Now Playing panel reports the live mpv time and duration,
 play state, resolution, frame rate, HDR/SDR mode, video and audio codecs, and SRT

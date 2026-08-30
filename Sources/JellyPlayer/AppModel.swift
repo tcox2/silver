@@ -6,17 +6,11 @@ import Foundation
 final class AppModel: ObservableObject {
     @Published var hasPlayback = false
     @Published var isHDR = false
-    @Published var configuredOutputModeDescriptions: [String] = []
     @Published private(set) var catalogReady = false
-    @Published private(set) var catalogLoadMessage = "Starting…"
-    @Published private(set) var catalogLoadedItems = 0
-    @Published private(set) var catalogTotalItems: Int?
-    @Published private(set) var catalogRefreshing = false
     let mpv = MPVController()
 
     private(set) var webServer: WebController?
     private var client: JellyfinClient?
-    private var items: [MediaItem] = []
     private let display = DisplayModeController()
     private var playingItem: MediaItem?
     private var playingSource: MediaSource?
@@ -33,9 +27,7 @@ final class AppModel: ObservableObject {
     private var isConfigured = false
     private var outputModes: [ConfiguredOutputMode] = []
     private var catalogUserID: String?
-    private var catalogRefreshTask: Task<Void, Never>?
     private var catalogRevision = 0
-    private var catalogRefreshError: String?
 
     func start() {
         guard webServer == nil else { return }
@@ -56,11 +48,7 @@ final class AppModel: ObservableObject {
         let server = WebController(model: self)
         webServer = server
         server.start(port: 8099)
-        Task { [weak self] in
-            guard let self else { return }
-            await self.loadConfiguration()
-            if self.catalogReady { self.startCatalogRefreshLoop() }
-        }
+        Task { await loadConfiguration() }
     }
 
     func webControllerFailed(_ message: String) {
@@ -72,40 +60,22 @@ final class AppModel: ObservableObject {
         configurationError = nil
         isConfigured = false
         catalogReady = false
-        catalogLoadMessage = "Loading configuration…"
-        catalogLoadedItems = 0
-        catalogTotalItems = nil
-        catalogRefreshing = false
-        catalogRefreshError = nil
         client = nil
-        items = []
         do {
             let configuration = try HomeCinemaConfiguration.load()
-            catalogLoadMessage = "Connecting to Jellyfin…"
             let anonymous = try JellyfinClient(server: configuration.jellyfinURL)
             let session = try await anonymous.authenticate(
                 username: configuration.username,
                 password: configuration.password
             )
             let authenticated = try JellyfinClient(server: configuration.jellyfinURL, token: session.accessToken)
-            catalogLoadMessage = "Loading Jellyfin catalogue…"
-            items = try await authenticated.catalogItems(userID: session.user.id) { [weak self] loaded, total in
-                guard let self else { return }
-                self.catalogLoadedItems = loaded
-                self.catalogTotalItems = total
-                self.catalogLoadMessage = total.map {
-                    "Loading Jellyfin catalogue… \(loaded) of \($0)"
-                } ?? "Loading Jellyfin catalogue… \(loaded) items"
-            }
             client = authenticated
             catalogUserID = session.user.id
             outputModes = configuration.outputModes
-            updateConfiguredOutputModeDescriptions()
             isConfigured = true
             catalogReady = true
             catalogRevision += 1
-            catalogLoadMessage = "Jellyfin catalogue ready"
-            SilverLog.info("Jellyfin connected; libraryItems=\(items.count) configuredModes=\(outputModes.count)")
+            SilverLog.info("Jellyfin connected; catalogue requests will be proxied configuredModes=\(outputModes.count)")
         } catch {
             configurationError = error.localizedDescription
             SilverLog.error("Cannot access Jellyfin: \(error.localizedDescription); terminating")
@@ -113,122 +83,41 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func startCatalogRefreshLoop() {
-        guard catalogRefreshTask == nil else { return }
-        catalogRefreshTask = Task { [weak self] in
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(86_400))
-                } catch {
-                    return
-                }
-                guard let self else { return }
-                if self.beginCatalogRefresh() {
-                    await self.performCatalogRefresh()
-                }
-            }
-        }
-        SilverLog.info("Jellyfin catalogue automatic refresh scheduled intervalHours=24")
-    }
-
-    private func beginCatalogRefresh() -> Bool {
-        guard !catalogRefreshing else { return false }
-        catalogRefreshing = true
-        catalogRefreshError = nil
-        return true
-    }
-
-    private func performCatalogRefresh() async {
-        guard let client, let catalogUserID else {
-            SilverLog.error("Jellyfin catalogue refresh skipped: authenticated session unavailable")
-            catalogRefreshing = false
-            return
-        }
-        defer { catalogRefreshing = false }
-        let previousMessage = catalogLoadMessage
-        catalogLoadedItems = 0
-        catalogTotalItems = nil
-        catalogLoadMessage = "Refreshing Jellyfin catalogue…"
-        SilverLog.info("Jellyfin catalogue refresh started")
-        do {
-            let replacement = try await client.catalogItems(userID: catalogUserID) { [weak self] loaded, total in
-                guard let self else { return }
-                self.catalogLoadedItems = loaded
-                self.catalogTotalItems = total
-                self.catalogLoadMessage = total.map {
-                    "Refreshing Jellyfin catalogue… \(loaded) of \($0)"
-                } ?? "Refreshing Jellyfin catalogue… \(loaded) items"
-            }
-            items = replacement
-            updateConfiguredOutputModeDescriptions()
-            catalogLoadedItems = replacement.count
-            catalogTotalItems = replacement.count
-            catalogRevision += 1
-            catalogLoadMessage = "Jellyfin catalogue ready"
-            SilverLog.info("Jellyfin catalogue refresh completed libraryItems=\(replacement.count)")
-        } catch {
-            catalogLoadMessage = previousMessage
-            catalogRefreshError = error.localizedDescription
-            SilverLog.error("Jellyfin catalogue refresh failed; retaining existing catalog: \(error.localizedDescription)")
-        }
-    }
-
-    func requestCatalogRefresh() throws {
-        guard catalogReady, client != nil, catalogUserID != nil else {
-            throw CinemaError.catalogUnavailable
-        }
-        guard beginCatalogRefresh() else { throw CinemaError.catalogRefreshBusy }
-        Task { [weak self] in await self?.performCatalogRefresh() }
-    }
-
     func webCatalogStatus() -> WebCatalogStatus {
         WebCatalogStatus(
             configured: isConfigured,
-            refreshing: catalogRefreshing,
-            progress: catalogLoadMessage,
-            loadedItems: catalogLoadedItems,
-            totalItems: catalogTotalItems,
+            refreshing: false,
+            progress: isConfigured ? "Jellyfin connected" : "Connecting to Jellyfin…",
+            loadedItems: 0,
+            totalItems: nil,
             revision: catalogRevision,
-            error: configurationError ?? catalogRefreshError
+            error: configurationError
         )
     }
 
-    private func updateConfiguredOutputModeDescriptions() {
-        var counts: [Int: Int] = [:]
-        for item in items {
-            guard let video = item.strictSource?.video,
-                  let width = video.width,
-                  let height = video.height,
-                  let frameRate = video.averageFrameRate,
-                  let index = outputModes.firstIndex(where: {
-                      $0.matches(width: width, height: height, frameRate: frameRate, hdr: video.isHDR)
-                  }) else { continue }
-            counts[index, default: 0] += 1
-        }
-        configuredOutputModeDescriptions = outputModes.enumerated().compactMap { index, mode in
-            guard let count = counts[index], count > 0 else { return nil }
-            let noun = count == 1 ? "item" : "items"
-            return "\(mode.label) — \(mode.displayWidth)×\(mode.displayHeight) · \(String(format: "%.3f", mode.displayRefreshRate)) Hz · \(mode.mediaDynamicRange.uppercased()) — \(count) \(noun)"
-        }
-        SilverLog.info("Catalogue output modes in use=\(configuredOutputModeDescriptions.count) mappedItems=\(counts.values.reduce(0, +))")
-    }
-
-    func webLibrary() -> WebLibraryResponse {
-        WebLibraryResponse(
-            configured: isConfigured,
-            error: configurationError,
-            progress: catalogLoadMessage,
-            loadedItems: catalogLoadedItems,
-            totalItems: catalogTotalItems,
-            items: items.map(WebMediaItem.init)
+    func webLibraryPage(query: String, offset: Int, limit: Int) async throws -> WebLibraryPageResponse {
+        guard catalogReady, let client, let catalogUserID else { throw CinemaError.catalogUnavailable }
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeOffset = max(0, offset)
+        let safeLimit = min(max(1, limit), 200)
+        let page = try await client.catalogPage(
+            userID: catalogUserID,
+            searchTerm: normalizedQuery,
+            startIndex: safeOffset,
+            limit: safeLimit
+        )
+        return WebLibraryPageResponse(
+            revision: catalogRevision,
+            offset: safeOffset,
+            limit: safeLimit,
+            total: page.totalRecordCount ?? (safeOffset + page.items.count),
+            items: page.items.map(WebMediaItem.init)
         )
     }
 
-    func webItem(itemID: String) throws -> WebItemDetail {
-        guard let item = items.first(where: { $0.id == itemID }) else {
-            throw CinemaError.incompatible
-        }
-        return WebItemDetail(item)
+    func webItem(itemID: String) async throws -> WebItemDetail {
+        guard let client, let catalogUserID else { throw CinemaError.catalogUnavailable }
+        return WebItemDetail(try await client.item(userID: catalogUserID, itemID: itemID))
     }
 
     func play(itemID: String, subtitleIndex: Int?) async throws {
@@ -238,8 +127,9 @@ final class AppModel: ObservableObject {
         }
         isPreparingPlayback = true
         defer { isPreparingPlayback = false }
-        guard let client, let item = items.first(where: { $0.id == itemID }),
-              let source = item.strictSource, let video = source.video,
+        guard let client, let catalogUserID else { throw CinemaError.catalogUnavailable }
+        let item = try await client.item(userID: catalogUserID, itemID: itemID)
+        guard let source = item.strictSource, let video = source.video,
               let url = client.playbackURL(itemID: item.id, source: source) else {
             throw CinemaError.incompatible
         }
@@ -611,7 +501,6 @@ enum CinemaError: LocalizedError {
     case nothingPlaying
     case invalidSubtitle
     case catalogUnavailable
-    case catalogRefreshBusy
     var errorDescription: String? {
         switch self {
         case .incompatible: "This item is not AV1 + FLAC + SRT in a supported direct-play container."
@@ -619,7 +508,6 @@ enum CinemaError: LocalizedError {
         case .nothingPlaying: "Nothing is currently playing."
         case .invalidSubtitle: "The selected SRT subtitle track is unavailable."
         case .catalogUnavailable: "The Jellyfin catalogue is not ready yet."
-        case .catalogRefreshBusy: "The Jellyfin catalogue is already being refreshed."
         }
     }
 }
@@ -693,12 +581,11 @@ struct WebDisplayOutput: Encodable, Sendable {
     let hdrPotential: Bool
 }
 
-struct WebLibraryResponse: Encodable, Sendable {
-    let configured: Bool
-    let error: String?
-    let progress: String
-    let loadedItems: Int
-    let totalItems: Int?
+struct WebLibraryPageResponse: Encodable, Sendable {
+    let revision: Int
+    let offset: Int
+    let limit: Int
+    let total: Int
     let items: [WebMediaItem]
 }
 
