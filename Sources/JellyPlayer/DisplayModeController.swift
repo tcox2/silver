@@ -32,9 +32,21 @@ final class DisplayModeController {
         let displayID = number.uint32Value
         SilverLog.info("Display target id=\(displayID) name=\(screen.localizedName) currentEDR=\(screen.maximumExtendedDynamicRangeColorComponentValue) potentialEDR=\(screen.maximumPotentialExtendedDynamicRangeColorComponentValue)")
         if originalMode == nil { originalMode = CGDisplayCopyDisplayMode(displayID) }
-        let override = configuredModes.first { $0.matches(width: width, height: height, frameRate: frameRate, hdr: hdr) }
+        let exactOverride = configuredModes.first {
+            $0.matches(width: width, height: height, frameRate: frameRate, hdr: hdr)
+        }
+        let containingOverride = configuredModes
+            .filter { $0.contains(width: width, height: height, frameRate: frameRate, hdr: hdr) }
+            .min {
+                let leftArea = $0.mediaWidth * $0.mediaHeight
+                let rightArea = $1.mediaWidth * $1.mediaHeight
+                if leftArea != rightArea { return leftArea < rightArea }
+                return ($0.displayWidth * $0.displayHeight) < ($1.displayWidth * $1.displayHeight)
+            }
+        let override = exactOverride ?? containingOverride
         if let override {
-            SilverLog.info("Configured mode label=\(override.label) output=\(override.displayWidth)x\(override.displayHeight) nominalHz=\(String(format: "%.6f", override.displayRefreshRate)) force=\(override.force)")
+            let match = exactOverride == nil ? "containing" : "exact"
+            SilverLog.info("Configured mode label=\(override.label) match=\(match) canvas=\(override.mediaWidth)x\(override.mediaHeight) output=\(override.displayWidth)x\(override.displayHeight) nominalHz=\(String(format: "%.6f", override.displayRefreshRate)) force=\(override.force)")
         } else {
             SilverLog.info("No configured override matched; selecting an exact-cadence discovered mode")
         }

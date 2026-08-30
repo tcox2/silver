@@ -62,6 +62,13 @@ struct ConfiguredOutputMode: Decodable, Sendable {
             && abs(mediaFrameRate - frameRate) < 0.01
             && (mediaDynamicRange.lowercased() == "hdr") == hdr
     }
+
+    func contains(width: Int, height: Int, frameRate: Double, hdr: Bool) -> Bool {
+        mediaWidth >= width && mediaHeight >= height
+            && displayWidth >= width && displayHeight >= height
+            && abs(mediaFrameRate - frameRate) < 0.01
+            && (mediaDynamicRange.lowercased() == "hdr") == hdr
+    }
 }
 
 enum ConfigurationError: LocalizedError {
