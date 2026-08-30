@@ -7,6 +7,11 @@ final class AppModel: ObservableObject {
     @Published var hasPlayback = false
     @Published var isHDR = false
     @Published var configuredOutputModeDescriptions: [String] = []
+    @Published private(set) var catalogReady = false
+    @Published private(set) var catalogLoadMessage = "Starting…"
+    @Published private(set) var catalogLoadedItems = 0
+    @Published private(set) var catalogTotalItems: Int?
+    @Published private(set) var catalogRefreshing = false
     let mpv = MPVController()
 
     private(set) var webServer: WebController?
@@ -27,6 +32,10 @@ final class AppModel: ObservableObject {
     private var configurationError: String?
     private var isConfigured = false
     private var outputModes: [ConfiguredOutputMode] = []
+    private var catalogUserID: String?
+    private var catalogRefreshTask: Task<Void, Never>?
+    private var catalogRevision = 0
+    private var catalogRefreshError: String?
 
     func start() {
         guard webServer == nil else { return }
@@ -47,7 +56,11 @@ final class AppModel: ObservableObject {
         let server = WebController(model: self)
         webServer = server
         server.start(port: 8099)
-        Task { await loadConfiguration() }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.loadConfiguration()
+            if self.catalogReady { self.startCatalogRefreshLoop() }
+        }
     }
 
     func webControllerFailed(_ message: String) {
@@ -58,23 +71,42 @@ final class AppModel: ObservableObject {
     func loadConfiguration() async {
         configurationError = nil
         isConfigured = false
+        catalogReady = false
+        catalogLoadMessage = "Loading configuration…"
+        catalogLoadedItems = 0
+        catalogTotalItems = nil
+        catalogRefreshing = false
+        catalogRefreshError = nil
         client = nil
         items = []
         do {
             let configuration = try HomeCinemaConfiguration.load()
+            catalogLoadMessage = "Connecting to Jellyfin…"
             let anonymous = try JellyfinClient(server: configuration.jellyfinURL)
             let session = try await anonymous.authenticate(
                 username: configuration.username,
                 password: configuration.password
             )
             let authenticated = try JellyfinClient(server: configuration.jellyfinURL, token: session.accessToken)
-            items = try await authenticated.catalogItems(userID: session.user.id)
+            catalogLoadMessage = "Loading Jellyfin catalogue…"
+            items = try await authenticated.catalogItems(userID: session.user.id) { [weak self] loaded, total in
+                guard let self else { return }
+                self.catalogLoadedItems = loaded
+                self.catalogTotalItems = total
+                self.catalogLoadMessage = total.map {
+                    "Loading Jellyfin catalogue… \(loaded) of \($0)"
+                } ?? "Loading Jellyfin catalogue… \(loaded) items"
+            }
             client = authenticated
+            catalogUserID = session.user.id
             outputModes = configuration.outputModes
             configuredOutputModeDescriptions = configuration.outputModes.map {
                 "\($0.label) — \($0.displayWidth)×\($0.displayHeight) · \(String(format: "%.3f", $0.displayRefreshRate)) Hz · \($0.mediaDynamicRange.uppercased())"
             }
             isConfigured = true
+            catalogReady = true
+            catalogRevision += 1
+            catalogLoadMessage = "Jellyfin catalogue ready"
             SilverLog.info("Jellyfin connected; libraryItems=\(items.count) configuredModes=\(outputModes.count)")
         } catch {
             configurationError = error.localizedDescription
@@ -83,10 +115,92 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func startCatalogRefreshLoop() {
+        guard catalogRefreshTask == nil else { return }
+        catalogRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(86_400))
+                } catch {
+                    return
+                }
+                guard let self else { return }
+                if self.beginCatalogRefresh() {
+                    await self.performCatalogRefresh()
+                }
+            }
+        }
+        SilverLog.info("Jellyfin catalogue automatic refresh scheduled intervalHours=24")
+    }
+
+    private func beginCatalogRefresh() -> Bool {
+        guard !catalogRefreshing else { return false }
+        catalogRefreshing = true
+        catalogRefreshError = nil
+        return true
+    }
+
+    private func performCatalogRefresh() async {
+        guard let client, let catalogUserID else {
+            SilverLog.error("Jellyfin catalogue refresh skipped: authenticated session unavailable")
+            catalogRefreshing = false
+            return
+        }
+        defer { catalogRefreshing = false }
+        let previousMessage = catalogLoadMessage
+        catalogLoadedItems = 0
+        catalogTotalItems = nil
+        catalogLoadMessage = "Refreshing Jellyfin catalogue…"
+        SilverLog.info("Jellyfin catalogue refresh started")
+        do {
+            let replacement = try await client.catalogItems(userID: catalogUserID) { [weak self] loaded, total in
+                guard let self else { return }
+                self.catalogLoadedItems = loaded
+                self.catalogTotalItems = total
+                self.catalogLoadMessage = total.map {
+                    "Refreshing Jellyfin catalogue… \(loaded) of \($0)"
+                } ?? "Refreshing Jellyfin catalogue… \(loaded) items"
+            }
+            items = replacement
+            catalogLoadedItems = replacement.count
+            catalogTotalItems = replacement.count
+            catalogRevision += 1
+            catalogLoadMessage = "Jellyfin catalogue ready"
+            SilverLog.info("Jellyfin catalogue refresh completed libraryItems=\(replacement.count)")
+        } catch {
+            catalogLoadMessage = previousMessage
+            catalogRefreshError = error.localizedDescription
+            SilverLog.error("Jellyfin catalogue refresh failed; retaining existing catalog: \(error.localizedDescription)")
+        }
+    }
+
+    func requestCatalogRefresh() throws {
+        guard catalogReady, client != nil, catalogUserID != nil else {
+            throw CinemaError.catalogUnavailable
+        }
+        guard beginCatalogRefresh() else { throw CinemaError.catalogRefreshBusy }
+        Task { [weak self] in await self?.performCatalogRefresh() }
+    }
+
+    func webCatalogStatus() -> WebCatalogStatus {
+        WebCatalogStatus(
+            configured: isConfigured,
+            refreshing: catalogRefreshing,
+            progress: catalogLoadMessage,
+            loadedItems: catalogLoadedItems,
+            totalItems: catalogTotalItems,
+            revision: catalogRevision,
+            error: configurationError ?? catalogRefreshError
+        )
+    }
+
     func webLibrary() -> WebLibraryResponse {
         WebLibraryResponse(
             configured: isConfigured,
             error: configurationError,
+            progress: catalogLoadMessage,
+            loadedItems: catalogLoadedItems,
+            totalItems: catalogTotalItems,
             items: items.map(WebMediaItem.init)
         )
     }
@@ -477,12 +591,16 @@ enum CinemaError: LocalizedError {
     case busy
     case nothingPlaying
     case invalidSubtitle
+    case catalogUnavailable
+    case catalogRefreshBusy
     var errorDescription: String? {
         switch self {
         case .incompatible: "This item is not AV1 + FLAC + SRT in a supported direct-play container."
         case .busy: "Silver is already preparing another playback request."
         case .nothingPlaying: "Nothing is currently playing."
         case .invalidSubtitle: "The selected SRT subtitle track is unavailable."
+        case .catalogUnavailable: "The Jellyfin catalogue is not ready yet."
+        case .catalogRefreshBusy: "The Jellyfin catalogue is already being refreshed."
         }
     }
 }
@@ -559,7 +677,20 @@ struct WebDisplayOutput: Encodable, Sendable {
 struct WebLibraryResponse: Encodable, Sendable {
     let configured: Bool
     let error: String?
+    let progress: String
+    let loadedItems: Int
+    let totalItems: Int?
     let items: [WebMediaItem]
+}
+
+struct WebCatalogStatus: Encodable, Sendable {
+    let configured: Bool
+    let refreshing: Bool
+    let progress: String
+    let loadedItems: Int
+    let totalItems: Int?
+    let revision: Int
+    let error: String?
 }
 
 struct WebNowPlaying: Encodable, Sendable {

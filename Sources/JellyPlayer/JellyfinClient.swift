@@ -28,7 +28,10 @@ struct JellyfinClient: Sendable {
         return try await send(request, as: JellyfinSession.self)
     }
 
-    func catalogItems(userID: String) async throws -> [MediaItem] {
+    func catalogItems(
+        userID: String,
+        progress: @MainActor @Sendable (Int, Int?) -> Void = { _, _ in }
+    ) async throws -> [MediaItem] {
         let pageSize = 500
         var startIndex = 0
         var catalog: [MediaItem] = []
@@ -46,6 +49,7 @@ struct JellyfinClient: Sendable {
             let response = try await send(request(path: "/Items", query: query), as: JellyfinItemsResponse.self)
             catalog.append(contentsOf: response.items)
             startIndex += response.items.count
+            await progress(startIndex, response.totalRecordCount)
             if response.items.isEmpty || response.items.count < pageSize ||
                 response.totalRecordCount.map({ startIndex >= $0 }) == true { break }
         }
