@@ -100,9 +100,7 @@ final class AppModel: ObservableObject {
             client = authenticated
             catalogUserID = session.user.id
             outputModes = configuration.outputModes
-            configuredOutputModeDescriptions = configuration.outputModes.map {
-                "\($0.label) — \($0.displayWidth)×\($0.displayHeight) · \(String(format: "%.3f", $0.displayRefreshRate)) Hz · \($0.mediaDynamicRange.uppercased())"
-            }
+            updateConfiguredOutputModeDescriptions()
             isConfigured = true
             catalogReady = true
             catalogRevision += 1
@@ -162,6 +160,7 @@ final class AppModel: ObservableObject {
                 } ?? "Refreshing Jellyfin catalogue… \(loaded) items"
             }
             items = replacement
+            updateConfiguredOutputModeDescriptions()
             catalogLoadedItems = replacement.count
             catalogTotalItems = replacement.count
             catalogRevision += 1
@@ -192,6 +191,26 @@ final class AppModel: ObservableObject {
             revision: catalogRevision,
             error: configurationError ?? catalogRefreshError
         )
+    }
+
+    private func updateConfiguredOutputModeDescriptions() {
+        var counts: [Int: Int] = [:]
+        for item in items {
+            guard let video = item.strictSource?.video,
+                  let width = video.width,
+                  let height = video.height,
+                  let frameRate = video.averageFrameRate,
+                  let index = outputModes.firstIndex(where: {
+                      $0.matches(width: width, height: height, frameRate: frameRate, hdr: video.isHDR)
+                  }) else { continue }
+            counts[index, default: 0] += 1
+        }
+        configuredOutputModeDescriptions = outputModes.enumerated().compactMap { index, mode in
+            guard let count = counts[index], count > 0 else { return nil }
+            let noun = count == 1 ? "item" : "items"
+            return "\(mode.label) — \(mode.displayWidth)×\(mode.displayHeight) · \(String(format: "%.3f", mode.displayRefreshRate)) Hz · \(mode.mediaDynamicRange.uppercased()) — \(count) \(noun)"
+        }
+        SilverLog.info("Catalogue output modes in use=\(configuredOutputModeDescriptions.count) mappedItems=\(counts.values.reduce(0, +))")
     }
 
     func webLibrary() -> WebLibraryResponse {

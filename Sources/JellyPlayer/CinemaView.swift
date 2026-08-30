@@ -17,7 +17,7 @@ struct CinemaView: View {
                         .font(.system(size: 32, weight: .light, design: .monospaced))
                         .foregroundStyle(.secondary)
                     if model.catalogReady {
-                        Text("AVAILABLE PROJECTOR MODES")
+                        Text("CATALOGUE OUTPUT MODES")
                             .font(.system(size: 24, weight: .medium, design: .rounded))
                             .foregroundStyle(.secondary)
                             .padding(.top, 12)
