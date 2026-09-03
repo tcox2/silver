@@ -11,6 +11,7 @@ final class AppModel: ObservableObject {
 
     private(set) var webServer: WebController?
     private var client: JellyfinClient?
+    private var youtubeClient: ZorgYouTubeClient?
     private let display = DisplayModeController()
     private var playingItem: MediaItem?
     private var playingSource: MediaSource?
@@ -72,6 +73,10 @@ final class AppModel: ObservableObject {
             client = authenticated
             catalogUserID = session.user.id
             outputModes = configuration.outputModes
+            if let url = configuration.youtubeURL, let username = configuration.youtubeUsername,
+               let password = configuration.youtubePassword {
+                youtubeClient = try ZorgYouTubeClient(server: url, username: username, password: password)
+            }
             isConfigured = true
             catalogReady = true
             catalogRevision += 1
@@ -119,6 +124,46 @@ final class AppModel: ObservableObject {
     func webItem(itemID: String) async throws -> WebItemDetail {
         guard let client, let catalogUserID else { throw CinemaError.catalogUnavailable }
         return WebItemDetail(try await client.item(userID: catalogUserID, itemID: itemID))
+    }
+
+    func webYouTubeVideos() async throws -> [ZorgYouTubeVideo] {
+        guard let youtubeClient else { throw CinemaError.youtubeUnavailable }
+        return try await youtubeClient.videos()
+    }
+
+    func playYouTube(videoID: String) async throws {
+        guard !isPreparingPlayback else { throw CinemaError.busy }
+        isPreparingPlayback = true
+        defer { isPreparingPlayback = false }
+        guard let youtubeClient,
+              let video = try await youtubeClient.videos().first(where: { $0.videoId == videoID }),
+              let url = youtubeClient.playbackURL(video),
+              video.width > 0, video.height > 0, video.frameRate > 0 else {
+            throw CinemaError.youtubeUnavailable
+        }
+        let stream = MediaStream(
+            codec: video.videoCodec, type: "Video", index: 0,
+            width: video.width, height: video.height, averageFrameRate: video.frameRate,
+            videoRange: video.dynamicRange, language: nil, displayTitle: nil, title: nil,
+            isDefault: true, isForced: false, isExternal: false
+        )
+        let audio = MediaStream(
+            codec: video.audioCodec, type: "Audio", index: 1,
+            width: nil, height: nil, averageFrameRate: nil, videoRange: nil,
+            language: nil, displayTitle: nil, title: nil,
+            isDefault: true, isForced: false, isExternal: false
+        )
+        let source = MediaSource(
+            id: video.videoId, name: video.title, path: nil, container: "mkv",
+            size: video.sizeBytes, bitrate: nil, runTimeTicks: nil, mediaStreams: [stream, audio]
+        )
+        let item = MediaItem(
+            id: video.videoId, name: video.title, type: "YouTube", productionYear: nil,
+            seriesName: nil, indexNumber: nil, parentIndexNumber: nil, overview: nil,
+            mediaSources: [source]
+        )
+        SilverLog.info("YouTube playback requested videoID=\(video.videoId) title=\(video.title)")
+        try await playPrepared(item: item, source: source, video: stream, url: url)
     }
 
     func play(itemID: String, subtitleIndex: Int?) async throws {
@@ -177,6 +222,22 @@ final class AppModel: ObservableObject {
             }
         }
         SilverLog.info("Playback requested item=\(item.name) source=\(source.id) subtitle=\(subtitle?.index.description ?? "off")")
+        try await playPrepared(
+            item: item, source: source, video: video, url: url,
+            subtitle: subtitle, embeddedSubtitleOrdinal: embeddedSubtitleOrdinal,
+            preparedSubtitleURL: preparedSubtitleURL
+        )
+    }
+
+    private func playPrepared(
+        item: MediaItem,
+        source: MediaSource,
+        video: MediaStream,
+        url: URL,
+        subtitle: MediaStream? = nil,
+        embeddedSubtitleOrdinal: Int? = nil,
+        preparedSubtitleURL: URL? = nil
+    ) async throws {
         stop()
         let generation = playbackGeneration.advance()
         userPaused = false
@@ -522,6 +583,7 @@ enum CinemaError: LocalizedError {
     case nothingPlaying
     case invalidSubtitle
     case catalogUnavailable
+    case youtubeUnavailable
     var errorDescription: String? {
         switch self {
         case .incompatible: "This item is not AV1 + FLAC + SRT in a supported direct-play container."
@@ -529,6 +591,7 @@ enum CinemaError: LocalizedError {
         case .nothingPlaying: "Nothing is currently playing."
         case .invalidSubtitle: "The selected SRT subtitle track is unavailable."
         case .catalogUnavailable: "The Jellyfin catalogue is not ready yet."
+        case .youtubeUnavailable: "The Zorg YouTube catalogue or selected video is unavailable."
         }
     }
 }

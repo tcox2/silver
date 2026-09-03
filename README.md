@@ -11,6 +11,9 @@ standard macOS APIs.
 The Mac has no local library UI. It opens full-screen on a black screen showing
 `home cinema`, and exposes its controller on port **8099**. Jellyfin connection
 details come from `config.json`; the browser contains no credential form.
+An optional YouTube tab reads Zorg's authenticated download catalogue and sends
+selected videos directly to the same strict full-screen playback path. Zorg's
+byte-range endpoint supports seeking without downloading the entire file first.
 
 ## Supported playback profile
 

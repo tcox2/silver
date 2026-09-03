@@ -1,6 +1,9 @@
 {
   "jellyfinURL": "https://leeloo.gipsy.cloud:8920",
   "username": "t",
+  "youtubeURL": "https://zorg.example.com:8787/",
+  "youtubeUsername": "t",
+  "youtubePassword": "replace-me",
   "outputModes": [
     {
       "label": "4K Film HDR",
