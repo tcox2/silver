@@ -19,6 +19,7 @@ CLANG_MODULE_CACHE_PATH="$cache_dir" swiftc \
   -target arm64-apple-macosx26.0 \
   -interface-compiler-version "$interface_version" \
   -o "$output" \
+  "$project_dir/Sources/JellyPlayer/DisplaySynchronization.swift" \
   "$project_dir/Sources/JellyPlayer/PlaybackPrebuffer.swift" \
   "$project_dir/Tests/PlaybackPrebufferTests.swift"
 "$output"

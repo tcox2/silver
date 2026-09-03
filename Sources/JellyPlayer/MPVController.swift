@@ -270,7 +270,16 @@ final class MPVController {
     }
 
     func verifyDisplaySynchronization(sourceFrameRate: Double, outputRefreshRate: Double) -> Bool {
-        let expectedCorrection = outputRefreshRate / sourceFrameRate
+        let decodedFrameRate = number("estimated-vf-fps")
+        let effectiveSourceFrameRate = DisplaySynchronization.effectiveSourceFrameRate(
+            declaredFrameRate: sourceFrameRate,
+            decodedFrameRate: decodedFrameRate
+        )
+        let expectedCorrection = DisplaySynchronization.expectedCorrection(
+            declaredFrameRate: sourceFrameRate,
+            decodedFrameRate: decodedFrameRate,
+            outputRefreshRate: outputRefreshRate
+        )
         let actualCorrection = number("video-speed-correction")
         let estimatedFPS = number("estimated-display-fps")
         let measuredFPS = renderView?.measuredRefreshRate
@@ -280,7 +289,9 @@ final class MPVController {
         let measuredOK = measuredFPS.map { abs($0 - outputRefreshRate) < 0.05 } ?? false
         SilverLog.info(
             "Display synchronization verification active=\(active) " +
-            "sourceFPS=\(String(format: "%.9f", sourceFrameRate)) " +
+            "declaredSourceFPS=\(String(format: "%.9f", sourceFrameRate)) " +
+            "decodedSourceFPS=\(decodedFrameRate.map { String(format: "%.9f", $0) } ?? "nil") " +
+            "effectiveSourceFPS=\(String(format: "%.9f", effectiveSourceFrameRate)) " +
             "outputFPS=\(String(format: "%.9f", outputRefreshRate)) " +
             "measuredFPS=\(measuredFPS.map { String(format: "%.9f", $0) } ?? "nil") " +
             "estimatedFPS=\(estimatedFPS.map { String(format: "%.9f", $0) } ?? "nil") " +

@@ -55,6 +55,11 @@ VPL-VW790ES signal table. Core Graphics reports the projector's 23.976 and 29.97
 presets nominally as 24 and 30 Hz; other resolution/rate combinations are rejected
 even if added to `config.json`.
 
+The post-start synchronization check derives its expected speed correction from
+mpv's decoded frame rate rather than rounded catalogue metadata. Thus 24000/1001
+material reported as 24 fps correctly expects the approximately 1.001x correction
+needed by a nominal 24 Hz HDMI mode.
+
 ## Build
 
 ```sh

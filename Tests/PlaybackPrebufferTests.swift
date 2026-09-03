@@ -53,6 +53,30 @@ enum PlaybackPrebufferTests {
             ).isReady(expectedPosition: nil, minimumDemuxedSeconds: 3),
             "a short file at EOF should not require three cached seconds"
         )
+        let cinemaRate = 24_000.0 / 1_001.0
+        check(
+            abs(DisplaySynchronization.expectedCorrection(
+                declaredFrameRate: 24,
+                decodedFrameRate: cinemaRate,
+                outputRefreshRate: 24
+            ) - 1.001) < 0.000_000_1,
+            "decoded 24000/1001 fps should expect mpv's 1.001 correction on 24 Hz"
+        )
+        check(
+            DisplaySynchronization.expectedCorrection(
+                declaredFrameRate: 25,
+                decodedFrameRate: 25,
+                outputRefreshRate: 25
+            ) == 1,
+            "integer cadence should retain unity correction"
+        )
+        check(
+            DisplaySynchronization.effectiveSourceFrameRate(
+                declaredFrameRate: 24,
+                decodedFrameRate: nil
+            ) == 24,
+            "declared frame rate should remain the fallback before mpv reports decoding"
+        )
         print("Playback prebuffer tests passed")
     }
 
