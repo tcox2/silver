@@ -131,6 +131,29 @@ For development, Silver falls back to `config.json` in the working directory.
 Set `HOME_CINEMA_CONFIG` to an absolute path to override both locations.
 Configuration changes take effect on the next launch.
 
+## Automatic updates through NATS
+
+Every successful build of `main` publishes an arm64 Silver application archive
+to the dedicated `SILVER_ARTIFACTS` object store, then atomically advances the
+`SILVER_RELEASES/current` key. The archive contains a pinned and checksummed
+official NATS CLI. Configure the repository secrets `DEPLOY_NATS_SERVER` and
+`DEPLOY_NATS_TOKEN` before enabling publication.
+
+Install the updater once on each Silver Mac:
+
+```sh
+./Scripts/install-updater.sh tls://nats.example.com:4222 /path/to/nats-token
+```
+
+`org.tcox.silver-updater` checks for a new release every 30 seconds. It validates
+the release descriptor, archive SHA-256, bundle identifier, embedded commit,
+arm64 executable, and code signature before replacing the application. It
+preserves the installed media-runtime frameworks because those licensed runtime
+files are not published by CI. If Silver reports active playback, installation
+is deferred; the same release is installed and Silver restarted after playback
+finishes. A release that does not return a healthy status within 20 seconds is
+rolled back to the previous application.
+
 ## Diagnostics
 
 Silver writes timestamped logs to `~/Library/Logs/Silver/silver.log` and rotates

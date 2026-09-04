@@ -29,6 +29,18 @@ CLANG_MODULE_CACHE_PATH="$cache_dir" swiftc \
 mkdir -p "$bundle_dir/Contents/MacOS" "$bundle_dir/Contents/Resources"
 cp "$output_dir/Silver" "$bundle_dir/Contents/MacOS/Silver"
 cp "$project_dir/Resources/Info.plist" "$bundle_dir/Contents/Info.plist"
+cp "$project_dir/Scripts/silver-updater" "$bundle_dir/Contents/Resources/silver-updater"
+cp "$project_dir/Resources/org.tcox.silver-updater.plist" "$bundle_dir/Contents/Resources/"
+if [[ -n ${SILVER_NATS_BIN:-} ]]; then
+  cp "$SILVER_NATS_BIN" "$bundle_dir/Contents/Resources/nats"
+elif [[ -x /Applications/Silver.app/Contents/Resources/nats ]]; then
+  cp /Applications/Silver.app/Contents/Resources/nats "$bundle_dir/Contents/Resources/nats"
+else
+  print -u2 "Set SILVER_NATS_BIN to the pinned NATS CLI binary."
+  exit 1
+fi
+chmod 755 "$bundle_dir/Contents/Resources/silver-updater" "$bundle_dir/Contents/Resources/nats"
+git -C "$project_dir" rev-parse HEAD > "$bundle_dir/Contents/Resources/commit.txt"
 printf 'APPL????' > "$bundle_dir/Contents/PkgInfo"
 if [[ -L "$bundle_dir/Contents/Frameworks" ]]; then
   unlink "$bundle_dir/Contents/Frameworks"

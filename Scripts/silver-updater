@@ -1,0 +1,182 @@
+#!/bin/zsh
+set -u
+
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+app=/Applications/Silver.app
+state_dir="$HOME/Library/Application Support/Silver/Updater"
+config="$state_dir/updater.conf"
+current_file="$state_dir/current-commit"
+pending_file="$state_dir/pending-commit"
+log_file="$HOME/Library/Logs/Silver/updater.log"
+release_bucket=SILVER_RELEASES
+object_bucket=SILVER_ARTIFACTS
+once=false
+[[ ${1:-} == --once ]] && once=true
+
+mkdir -p "$state_dir" "${log_file:h}"
+touch "$log_file"
+chmod 600 "$log_file"
+exec >>"$log_file" 2>&1
+
+log() { print -- "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*" }
+
+if [[ ! -r "$config" ]]; then
+  log "Updater configuration is missing: $config"
+  exit 1
+fi
+source "$config"
+
+if [[ -z ${NATS_URL:-} || -z ${NATS_TOKEN_FILE:-} || ! -r $NATS_TOKEN_FILE ]]; then
+  log "Updater requires NATS_URL and a readable NATS_TOKEN_FILE"
+  exit 1
+fi
+
+nats_bin="$app/Contents/Resources/nats"
+if [[ ! -x "$nats_bin" ]]; then
+  log "Bundled NATS client is missing: $nats_bin"
+  exit 1
+fi
+export NATS_TOKEN="$(<"$NATS_TOKEN_FILE")"
+nats_args=(--server "$NATS_URL" --timeout 30s --no-context)
+
+is_silver_running() {
+  pgrep -f '^/Applications/Silver.app/Contents/MacOS/Silver$' >/dev/null 2>&1
+}
+
+is_playing() {
+  local status
+  if ! status="$(curl --silent --show-error --fail --max-time 5 \
+      http://127.0.0.1:8099/api/status 2>/dev/null)"; then
+    is_silver_running && return 0
+    return 1
+  fi
+  STATUS_JSON="$status" python3 -c \
+    'import json,os,sys; sys.exit(0 if json.loads(os.environ["STATUS_JSON"]).get("nowPlaying") else 1)'
+}
+
+wait_until_healthy() {
+  local attempt
+  for attempt in {1..20}; do
+    curl --silent --fail --max-time 2 http://127.0.0.1:8099/api/status >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  return 1
+}
+
+install_release() {
+  local descriptor parsed commit object expected actual staging archive incoming previous failed
+  if ! descriptor="$("$nats_bin" "${nats_args[@]}" kv get \
+      "$release_bucket" current --raw 2>/dev/null)"; then
+    log "Unable to read the current Silver release pointer"
+    return
+  fi
+  if ! parsed="$(DESCRIPTOR_JSON="$descriptor" python3 -c '
+import json, os, re, sys
+d=json.loads(os.environ["DESCRIPTOR_JSON"])
+values=(d.get("commit",""),d.get("object",""),d.get("sha256",""))
+if not re.fullmatch(r"[0-9a-f]{40}",values[0]): raise SystemExit(1)
+if not re.fullmatch(r"silver-[0-9a-f]{40}\.zip",values[1]): raise SystemExit(1)
+if not re.fullmatch(r"[0-9a-f]{64}",values[2]): raise SystemExit(1)
+print("\t".join(values))
+')"; then
+    log "Ignored an invalid Silver release descriptor"
+    return
+  fi
+  IFS=$'\t' read -r commit object expected <<< "$parsed"
+  [[ -r "$current_file" && "$(<"$current_file")" == "$commit" ]] && return
+
+  if is_playing; then
+    if [[ ! -r "$pending_file" || "$(<"$pending_file")" != "$commit" ]]; then
+      print -r -- "$commit" > "$pending_file"
+      log "Deferred release $commit because media is playing"
+    fi
+    return
+  fi
+
+  staging="/Applications/.Silver-update-$commit"
+  archive="$state_dir/$object.part"
+  rm -rf -- "$staging"
+  rm -f -- "$archive"
+  mkdir -p "$staging"
+  log "Downloading release $commit"
+  if ! "$nats_bin" "${nats_args[@]}" object get "$object_bucket" "$object" \
+      --output "$archive" --force --no-progress; then
+    log "Failed to download release $commit"
+    rm -rf -- "$staging"
+    rm -f -- "$archive"
+    return
+  fi
+  actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+  if [[ "$actual" != "$expected" ]]; then
+    log "Rejected release $commit: SHA-256 mismatch"
+    rm -rf -- "$staging"
+    rm -f -- "$archive"
+    return
+  fi
+  if ! ditto -x -k "$archive" "$staging"; then
+    log "Rejected release $commit: archive extraction failed"
+    rm -rf -- "$staging"
+    rm -f -- "$archive"
+    return
+  fi
+  incoming="$staging/Silver.app"
+  if [[ ! -x "$incoming/Contents/MacOS/Silver" \
+        || "$(plutil -extract CFBundleIdentifier raw "$incoming/Contents/Info.plist" 2>/dev/null)" != org.tcox.silver \
+        || "$(<"$incoming/Contents/Resources/commit.txt" 2>/dev/null)" != "$commit" \
+        || "$(file "$incoming/Contents/MacOS/Silver")" != *arm64* ]]; then
+    log "Rejected release $commit: bundle identity, commit, or architecture is invalid"
+    rm -rf -- "$staging"
+    rm -f -- "$archive"
+    return
+  fi
+
+  if [[ ! -d "$incoming/Contents/Frameworks" ]]; then
+    if [[ ! -d "$app/Contents/Frameworks" ]]; then
+      log "Rejected release $commit: no media runtime is available"
+      rm -rf -- "$staging"
+      rm -f -- "$archive"
+      return
+    fi
+    ditto "$app/Contents/Frameworks" "$incoming/Contents/Frameworks"
+  fi
+  xattr -dr com.apple.quarantine "$incoming" 2>/dev/null || true
+  if ! codesign --force --deep --sign - "$incoming" \
+      || ! codesign --verify --deep --strict "$incoming"; then
+    log "Rejected release $commit: code-signature verification failed"
+    rm -rf -- "$staging"
+    rm -f -- "$archive"
+    return
+  fi
+
+  previous=/Applications/Silver.previous.app
+  failed="$state_dir/Silver.failed-$commit.app"
+  rm -rf -- "$previous" "$failed"
+  if ! mv "$app" "$previous" || ! mv "$incoming" "$app"; then
+    log "Install move failed for release $commit; restoring previous app"
+    [[ -d "$previous" && ! -d "$app" ]] && mv "$previous" "$app"
+    rm -rf -- "$staging"
+    rm -f -- "$archive"
+    return
+  fi
+  launchctl kickstart -k "gui/$UID/org.tcox.silver" >/dev/null 2>&1 || true
+  if ! wait_until_healthy; then
+    log "Release $commit did not become healthy; rolling back"
+    mv "$app" "$failed"
+    mv "$previous" "$app"
+    launchctl kickstart -k "gui/$UID/org.tcox.silver" >/dev/null 2>&1 || true
+    rm -rf -- "$staging"
+    rm -f -- "$archive"
+    return
+  fi
+  print -r -- "$commit" > "$current_file"
+  rm -f -- "$pending_file" "$archive"
+  rm -rf -- "$staging"
+  log "Installed release $commit and restarted Silver"
+}
+
+while true; do
+  install_release
+  $once && break
+  sleep 30
+done

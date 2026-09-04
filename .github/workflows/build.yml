@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: silver-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: macOS Tahoe (Apple silicon)
@@ -18,6 +22,26 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+
+      - name: Install pinned NATS client
+        shell: zsh {0}
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            --output nats.zip \
+            https://github.com/nats-io/natscli/releases/download/v0.4.0/nats-0.4.0-darwin-arm64.zip
+          echo '39a68a0673f1b87d0887f48b02ca17f5d803f5689d4a9cff8e74b6411d6baef7  nats.zip' \
+            | shasum -a 256 --check
+          ditto -x -k nats.zip .build/nats
+          cp .build/nats/nats-0.4.0-darwin-arm64/nats .build/nats-client
+          chmod 755 .build/nats-client
+
+      - name: Validate updater
+        shell: zsh {0}
+        run: |
+          set -euo pipefail
+          zsh -n Scripts/silver-updater Scripts/install-updater.sh
+          plutil -lint Resources/org.tcox.silver-updater.plist
 
       - name: Build Silver
         shell: zsh {0}
@@ -33,6 +57,12 @@ jobs:
             -o .build/ci/Silver.app/Contents/MacOS/Silver \
             Sources/JellyPlayer/*.swift
           cp Resources/Info.plist .build/ci/Silver.app/Contents/Info.plist
+          cp Scripts/silver-updater .build/ci/Silver.app/Contents/Resources/
+          cp Resources/org.tcox.silver-updater.plist .build/ci/Silver.app/Contents/Resources/
+          cp .build/nats-client .build/ci/Silver.app/Contents/Resources/nats
+          chmod 755 .build/ci/Silver.app/Contents/Resources/silver-updater \
+            .build/ci/Silver.app/Contents/Resources/nats
+          printf '%s\n' "$GITHUB_SHA" > .build/ci/Silver.app/Contents/Resources/commit.txt
           printf 'APPL????' > .build/ci/Silver.app/Contents/PkgInfo
           codesign --force --deep --sign - .build/ci/Silver.app
 
@@ -54,3 +84,31 @@ jobs:
             Silver-macos-arm64.zip.sha256
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish release through NATS
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        shell: zsh {0}
+        env:
+          NATS_URL: ${{ secrets.DEPLOY_NATS_SERVER }}
+          NATS_TOKEN: ${{ secrets.DEPLOY_NATS_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ "$NATS_URL" == tls://* ]]
+          nats=.build/nats-client
+          args=(--server "$NATS_URL" --timeout 30s --no-context)
+          "$nats" "${args[@]}" kv info SILVER_RELEASES >/dev/null 2>&1 \
+            || "$nats" "${args[@]}" kv add SILVER_RELEASES \
+              --description 'Current Silver application release' --history 5 \
+              --storage file --max-bucket-size 1048576
+          "$nats" "${args[@]}" object info SILVER_ARTIFACTS >/dev/null 2>&1 \
+            || "$nats" "${args[@]}" object add SILVER_ARTIFACTS \
+              --description 'Silver macOS release archives' --storage file \
+              --ttl 720h --max-bucket-size 1073741824
+          object="silver-$GITHUB_SHA.zip"
+          digest="$(shasum -a 256 Silver-macos-arm64.zip | awk '{print $1}')"
+          "$nats" "${args[@]}" object put SILVER_ARTIFACTS Silver-macos-arm64.zip \
+            --name "$object" --description "Silver $GITHUB_SHA" \
+            --chunk-size 1048576 --force --no-progress
+          descriptor="$(printf '{\"commit\":\"%s\",\"object\":\"%s\",\"sha256\":\"%s\"}' \
+            "$GITHUB_SHA" "$object" "$digest")"
+          "$nats" "${args[@]}" kv put SILVER_RELEASES current "$descriptor"
