@@ -2,6 +2,7 @@ import Foundation
 
 struct ZorgYouTubeVideo: Codable, Sendable {
     let title: String; let videoId: String; let downloadedAt: String
+    let channel: String?
     let sizeBytes: Int64; let downloadUrl: String
     let width: Int; let height: Int; let frameRate: Double
     let dynamicRange: String; let videoCodec: String; let audioCodec: String

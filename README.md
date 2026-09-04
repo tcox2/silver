@@ -124,6 +124,8 @@ Then run:
 
 The web controller listens on all interfaces on TCP port 8099. It is intended for
 a trusted home network; do not expose this port directly to the internet.
+The YouTube tab displays each downloaded video's source channel from Zorg's
+stored yt-dlp metadata.
 
 For development, Silver falls back to `config.json` in the working directory.
 Set `HOME_CINEMA_CONFIG` to an absolute path to override both locations.
