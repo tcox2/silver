@@ -16,7 +16,8 @@ selected videos directly to the same strict full-screen playback path. Zorg's
 byte-range endpoint supports seeking without downloading the entire file first.
 The Control tab can operate one explicitly configured Loxone `Switch`. In the
 house configuration this is the existing `Projector Power` control; the browser
-can send only its fixed `on` and `off` commands.
+can send only its fixed `on` and `off` commands. It also has a confirmation-gated
+Reboot control for the Mac running Silver.
 
 ## Supported playback profile
 
@@ -127,6 +128,10 @@ a trusted home network; do not expose this port directly to the internet.
 The YouTube tab displays each downloaded video's source channel from Zorg's
 stored yt-dlp metadata.
 
+Each loaded page polls a per-process server generation identifier. If Silver
+disappears, restarts, or upgrades, the stale page clears its tabs and asks the
+user to refresh instead of continuing to present obsolete controls.
+
 For development, Silver falls back to `config.json` in the working directory.
 Set `HOME_CINEMA_CONFIG` to an absolute path to override both locations.
 Configuration changes take effect on the next launch.
@@ -151,8 +156,10 @@ arm64 executable, and code signature before replacing the application. It
 preserves the installed media-runtime frameworks because those licensed runtime
 files are not published by CI. If Silver reports active playback, installation
 is deferred; the same release is installed and Silver restarted after playback
-finishes. A release that does not return a healthy status within 20 seconds is
-rolled back to the previous application.
+finishes. A release that does not remain healthy during startup is retried once
+and then rolled back to the previous application. A startup counts
+as healthy only after its process and API remain available for ten consecutive
+seconds.
 
 ## Diagnostics
 
