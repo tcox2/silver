@@ -45,13 +45,13 @@ is_silver_running() {
 }
 
 is_playing() {
-  local status
-  if ! status="$(curl --silent --show-error --fail --max-time 5 \
+  local status_json
+  if ! status_json="$(curl --silent --show-error --fail --max-time 5 \
       http://127.0.0.1:8099/api/status 2>/dev/null)"; then
     is_silver_running && return 0
     return 1
   fi
-  STATUS_JSON="$status" python3 -c \
+  STATUS_JSON="$status_json" python3 -c \
     'import json,os,sys; sys.exit(0 if json.loads(os.environ["STATUS_JSON"]).get("nowPlaying") else 1)'
 }
 
