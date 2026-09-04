@@ -40,7 +40,13 @@ else
   exit 1
 fi
 chmod 755 "$bundle_dir/Contents/Resources/silver-updater" "$bundle_dir/Contents/Resources/nats"
-git -C "$project_dir" rev-parse HEAD > "$bundle_dir/Contents/Resources/commit.txt"
+commit=${SILVER_COMMIT:-${GITHUB_SHA:-}}
+if [[ -z $commit ]] && git -C "$project_dir" rev-parse --git-dir >/dev/null 2>&1; then
+  commit=$(git -C "$project_dir" rev-parse HEAD)
+fi
+[[ $commit =~ '^[0-9a-f]{40}$' ]] \
+  || { print -u2 "Set SILVER_COMMIT to the 40-character release commit."; exit 1; }
+print -r -- "$commit" > "$bundle_dir/Contents/Resources/commit.txt"
 printf 'APPL????' > "$bundle_dir/Contents/PkgInfo"
 if [[ -L "$bundle_dir/Contents/Frameworks" ]]; then
   unlink "$bundle_dir/Contents/Frameworks"
