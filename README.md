@@ -106,10 +106,12 @@ chmod 600 "$HOME/Library/Application Support/Silver/config.json"
 ```
 
 Loxone control is optional. Set `loxoneURL`, `loxoneUsername`, `loxonePassword`,
-and `projectorPowerUUID` together to enable it. Silver accepts only an HTTPS
-Miniserver URL and sends credentials only in its TLS-protected request. Keep the
-configuration mode `0600`; a dedicated Loxone user restricted to the projector
-control is preferable to an administrator account.
+and `projectorPowerUUID` together to enable it. Set `amplifierVolumeUUID` to show
+the current Lounge/Zone 1 amplifier volume and provide fixed 2-point Volume Down
+and Volume Up controls. Silver accepts only an HTTPS Miniserver URL and sends
+credentials only in its TLS-protected request. Keep the configuration mode
+`0600`; a dedicated Loxone user restricted to these controls is preferable to an
+administrator account.
 
 Then run:
 

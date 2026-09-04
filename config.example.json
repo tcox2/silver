@@ -8,6 +8,7 @@
   "loxoneUsername": "silver",
   "loxonePassword": "replace-me",
   "projectorPowerUUID": "1fd076b1-0118-5dba-ffff993517bf8dbf",
+  "amplifierVolumeUUID": "1fc97e1d-01bd-a67c-ffffb7c76d2e41b4",
   "outputModes": [
     {
       "label": "4K Film HDR",

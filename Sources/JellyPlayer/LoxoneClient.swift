@@ -4,8 +4,15 @@ struct LoxoneClient: Sendable {
     private let server: URL
     private let authorization: String
     private let projectorPowerUUID: String
+    private let amplifierVolumeUUID: String?
 
-    init(server: String, username: String, password: String, projectorPowerUUID: String) throws {
+    init(
+        server: String,
+        username: String,
+        password: String,
+        projectorPowerUUID: String,
+        amplifierVolumeUUID: String?
+    ) throws {
         guard let url = URL(string: server), url.scheme?.lowercased() == "https",
               url.host != nil, !username.isEmpty, !password.isEmpty,
               !projectorPowerUUID.isEmpty else {
@@ -14,11 +21,43 @@ struct LoxoneClient: Sendable {
         self.server = url
         authorization = "Basic " + Data("\(username):\(password)".utf8).base64EncodedString()
         self.projectorPowerUUID = projectorPowerUUID
+        self.amplifierVolumeUUID = amplifierVolumeUUID
     }
+
+    var hasAmplifierVolume: Bool { amplifierVolumeUUID?.isEmpty == false }
 
     func setProjectorPower(on: Bool) async throws -> LoxoneCommandResult {
         let command = on ? "on" : "off"
-        let url = Self.commandURL(server: server, uuid: projectorPowerUUID, command: command)
+        return try await request(uuid: projectorPowerUUID, command: command)
+    }
+
+    func currentAmplifierVolume() async throws -> Double {
+        guard let amplifierVolumeUUID, !amplifierVolumeUUID.isEmpty else {
+            throw LoxoneError.amplifierVolumeNotConfigured
+        }
+        let result = try await request(uuid: amplifierVolumeUUID, command: nil)
+        guard let value = result.value.flatMap(Double.init), value.isFinite else {
+            throw LoxoneError.invalidVolume
+        }
+        return value
+    }
+
+    func adjustAmplifierVolume(by delta: Double) async throws -> LoxoneVolumeResult {
+        guard let amplifierVolumeUUID, !amplifierVolumeUUID.isEmpty else {
+            throw LoxoneError.amplifierVolumeNotConfigured
+        }
+        let previous = try await currentAmplifierVolume()
+        let requested = Self.adjustedVolume(current: previous, delta: delta)
+        let response = try await request(
+            uuid: amplifierVolumeUUID,
+            command: String(format: "%.1f", requested)
+        )
+        let current = response.value.flatMap(Double.init) ?? requested
+        return LoxoneVolumeResult(previousVolume: previous, currentVolume: current)
+    }
+
+    private func request(uuid: String, command: String?) async throws -> LoxoneCommandResult {
+        let url = Self.commandURL(server: server, uuid: uuid, command: command)
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.httpMethod = "GET"
         request.setValue(authorization, forHTTPHeaderField: "Authorization")
@@ -27,16 +66,20 @@ struct LoxoneClient: Sendable {
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
             throw LoxoneError.http((response as? HTTPURLResponse)?.statusCode ?? 0)
         }
-        return try Self.parseCommandResponse(data, command: command)
+        return try Self.parseCommandResponse(data, command: command ?? "read")
     }
 
-    static func commandURL(server: URL, uuid: String, command: String) -> URL {
-        server
+    static func commandURL(server: URL, uuid: String, command: String?) -> URL {
+        let controlURL = server
             .appendingPathComponent("jdev")
             .appendingPathComponent("sps")
             .appendingPathComponent("io")
             .appendingPathComponent(uuid)
-            .appendingPathComponent(command)
+        return command.map { controlURL.appendingPathComponent($0) } ?? controlURL
+    }
+
+    static func adjustedVolume(current: Double, delta: Double) -> Double {
+        min(100, max(0, current + delta))
     }
 
     static func parseCommandResponse(_ data: Data, command: String) throws -> LoxoneCommandResult {
@@ -58,11 +101,18 @@ struct LoxoneCommandResult: Encodable, Sendable {
     let value: String?
 }
 
+struct LoxoneVolumeResult: Encodable, Sendable {
+    let previousVolume: Double
+    let currentVolume: Double
+}
+
 enum LoxoneError: LocalizedError {
     case invalidConfiguration
     case http(Int)
     case invalidResponse
     case commandRejected(String)
+    case amplifierVolumeNotConfigured
+    case invalidVolume
 
     var errorDescription: String? {
         switch self {
@@ -73,7 +123,11 @@ enum LoxoneError: LocalizedError {
         case .invalidResponse:
             "The Loxone Miniserver returned an invalid response."
         case let .commandRejected(code):
-            "The Loxone Miniserver rejected the projector command with code \(code)."
+            "The Loxone Miniserver rejected the command with code \(code)."
+        case .amplifierVolumeNotConfigured:
+            "The Loxone Lounge amplifier volume control is not configured."
+        case .invalidVolume:
+            "The Loxone Miniserver returned an invalid amplifier volume."
         }
     }
 }

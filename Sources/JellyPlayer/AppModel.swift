@@ -13,6 +13,7 @@ final class AppModel: ObservableObject {
     private var client: JellyfinClient?
     private var youtubeClient: ZorgYouTubeClient?
     private var loxoneClient: LoxoneClient?
+    private var isAdjustingLoxoneVolume = false
     private let display = DisplayModeController()
     private var playingItem: MediaItem?
     private var playingSource: MediaSource?
@@ -87,7 +88,8 @@ final class AppModel: ObservableObject {
                     server: url,
                     username: username,
                     password: password,
-                    projectorPowerUUID: projectorPowerUUID
+                    projectorPowerUUID: projectorPowerUUID,
+                    amplifierVolumeUUID: configuration.amplifierVolumeUUID
                 )
             }
             isConfigured = true
@@ -144,14 +146,56 @@ final class AppModel: ObservableObject {
         return try await youtubeClient.videos()
     }
 
-    func webControlStatus() -> WebControlStatus {
-        WebControlStatus(projectorPowerConfigured: loxoneClient != nil)
+    func webControlStatus() async -> WebControlStatus {
+        guard let loxoneClient else {
+            return WebControlStatus(
+                projectorPowerConfigured: false,
+                amplifierVolumeConfigured: false,
+                currentVolume: nil,
+                error: nil
+            )
+        }
+        guard loxoneClient.hasAmplifierVolume else {
+            return WebControlStatus(
+                projectorPowerConfigured: true,
+                amplifierVolumeConfigured: false,
+                currentVolume: nil,
+                error: nil
+            )
+        }
+        do {
+            return WebControlStatus(
+                projectorPowerConfigured: true,
+                amplifierVolumeConfigured: true,
+                currentVolume: try await loxoneClient.currentAmplifierVolume(),
+                error: nil
+            )
+        } catch {
+            return WebControlStatus(
+                projectorPowerConfigured: true,
+                amplifierVolumeConfigured: true,
+                currentVolume: nil,
+                error: error.localizedDescription
+            )
+        }
     }
 
     func setProjectorPower(on: Bool) async throws -> LoxoneCommandResult {
         guard let loxoneClient else { throw CinemaError.loxoneUnavailable }
         let result = try await loxoneClient.setProjectorPower(on: on)
         SilverLog.info("Loxone Projector Power command=\(result.command) accepted value=\(result.value ?? "unknown")")
+        return result
+    }
+
+    func adjustAmplifierVolume(by delta: Double) async throws -> LoxoneVolumeResult {
+        guard !isAdjustingLoxoneVolume else { throw CinemaError.busy }
+        guard let loxoneClient else { throw CinemaError.loxoneUnavailable }
+        isAdjustingLoxoneVolume = true
+        defer { isAdjustingLoxoneVolume = false }
+        let result = try await loxoneClient.adjustAmplifierVolume(by: delta)
+        SilverLog.info(
+            "Loxone Lounge amplifier volume previous=\(result.previousVolume) current=\(result.currentVolume)"
+        )
         return result
     }
 
@@ -699,6 +743,9 @@ struct WebPlaybackStatus: Encodable, Sendable {
 
 struct WebControlStatus: Encodable, Sendable {
     let projectorPowerConfigured: Bool
+    let amplifierVolumeConfigured: Bool
+    let currentVolume: Double?
+    let error: String?
 }
 
 struct WebDisplayOutput: Encodable, Sendable {

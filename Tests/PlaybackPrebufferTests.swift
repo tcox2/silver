@@ -86,6 +86,20 @@ enum PlaybackPrebufferTests {
             ).absoluteString == "https://loxone.example/jdev/sps/io/projector-uuid/on",
             "projector commands should target the configured switch only"
         )
+        check(
+            LoxoneClient.commandURL(
+                server: loxoneServer,
+                uuid: "amplifier-volume-uuid",
+                command: nil
+            ).absoluteString == "https://loxone.example/jdev/sps/io/amplifier-volume-uuid",
+            "volume reads should target the configured slider without a command"
+        )
+        check(
+            LoxoneClient.adjustedVolume(current: 40, delta: 2) == 42
+                && LoxoneClient.adjustedVolume(current: 99, delta: 2) == 100
+                && LoxoneClient.adjustedVolume(current: 1, delta: -2) == 0,
+            "volume adjustments should use two-point steps and stay within the slider range"
+        )
         let response = Data(#"{"LL":{"control":"dev/sps/io/projector-uuid/on","value":"1","Code":"200"}}"#.utf8)
         let parsed = try! LoxoneClient.parseCommandResponse(response, command: "on")
         check(parsed.command == "on" && parsed.value == "1", "successful Loxone responses should be accepted")
