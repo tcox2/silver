@@ -4,6 +4,10 @@
   "youtubeURL": "https://zorg.example.com:8787/",
   "youtubeUsername": "t",
   "youtubePassword": "replace-me",
+  "loxoneURL": "https://192-168-4-132.504f94a1d30a.dyndns.loxonecloud.com",
+  "loxoneUsername": "silver",
+  "loxonePassword": "replace-me",
+  "projectorPowerUUID": "1fd076b1-0118-5dba-ffff993517bf8dbf",
   "outputModes": [
     {
       "label": "4K Film HDR",

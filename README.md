@@ -14,6 +14,9 @@ details come from `config.json`; the browser contains no credential form.
 An optional YouTube tab reads Zorg's authenticated download catalogue and sends
 selected videos directly to the same strict full-screen playback path. Zorg's
 byte-range endpoint supports seeking without downloading the entire file first.
+The Control tab can operate one explicitly configured Loxone `Switch`. In the
+house configuration this is the existing `Projector Power` control; the browser
+can send only its fixed `on` and `off` commands.
 
 ## Supported playback profile
 
@@ -101,6 +104,12 @@ mkdir -p "$HOME/Library/Application Support/Silver"
 cp config.example.json "$HOME/Library/Application Support/Silver/config.json"
 chmod 600 "$HOME/Library/Application Support/Silver/config.json"
 ```
+
+Loxone control is optional. Set `loxoneURL`, `loxoneUsername`, `loxonePassword`,
+and `projectorPowerUUID` together to enable it. Silver accepts only an HTTPS
+Miniserver URL and sends credentials only in its TLS-protected request. Keep the
+configuration mode `0600`; a dedicated Loxone user restricted to the projector
+control is preferable to an administrator account.
 
 Then run:
 

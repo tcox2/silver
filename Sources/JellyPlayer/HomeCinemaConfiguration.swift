@@ -8,8 +8,16 @@ struct HomeCinemaConfiguration: Decodable, Sendable {
     let youtubeURL: String?
     let youtubeUsername: String?
     let youtubePassword: String?
+    let loxoneURL: String?
+    let loxoneUsername: String?
+    let loxonePassword: String?
+    let projectorPowerUUID: String?
 
-    enum CodingKeys: String, CodingKey { case jellyfinURL, username, password, outputModes, youtubeURL, youtubeUsername, youtubePassword }
+    enum CodingKeys: String, CodingKey {
+        case jellyfinURL, username, password, outputModes
+        case youtubeURL, youtubeUsername, youtubePassword
+        case loxoneURL, loxoneUsername, loxonePassword, projectorPowerUUID
+    }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -20,6 +28,10 @@ struct HomeCinemaConfiguration: Decodable, Sendable {
         youtubeURL = try values.decodeIfPresent(String.self, forKey: .youtubeURL)
         youtubeUsername = try values.decodeIfPresent(String.self, forKey: .youtubeUsername)
         youtubePassword = try values.decodeIfPresent(String.self, forKey: .youtubePassword)
+        loxoneURL = try values.decodeIfPresent(String.self, forKey: .loxoneURL)
+        loxoneUsername = try values.decodeIfPresent(String.self, forKey: .loxoneUsername)
+        loxonePassword = try values.decodeIfPresent(String.self, forKey: .loxonePassword)
+        projectorPowerUUID = try values.decodeIfPresent(String.self, forKey: .projectorPowerUUID)
     }
 
     static func load() throws -> Self {

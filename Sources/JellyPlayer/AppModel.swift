@@ -12,6 +12,7 @@ final class AppModel: ObservableObject {
     private(set) var webServer: WebController?
     private var client: JellyfinClient?
     private var youtubeClient: ZorgYouTubeClient?
+    private var loxoneClient: LoxoneClient?
     private let display = DisplayModeController()
     private var playingItem: MediaItem?
     private var playingSource: MediaSource?
@@ -62,6 +63,8 @@ final class AppModel: ObservableObject {
         isConfigured = false
         catalogReady = false
         client = nil
+        youtubeClient = nil
+        loxoneClient = nil
         do {
             let configuration = try HomeCinemaConfiguration.load()
             let anonymous = try JellyfinClient(server: configuration.jellyfinURL)
@@ -76,6 +79,16 @@ final class AppModel: ObservableObject {
             if let url = configuration.youtubeURL, let username = configuration.youtubeUsername,
                let password = configuration.youtubePassword {
                 youtubeClient = try ZorgYouTubeClient(server: url, username: username, password: password)
+            }
+            if let url = configuration.loxoneURL, let username = configuration.loxoneUsername,
+               let password = configuration.loxonePassword,
+               let projectorPowerUUID = configuration.projectorPowerUUID {
+                loxoneClient = try LoxoneClient(
+                    server: url,
+                    username: username,
+                    password: password,
+                    projectorPowerUUID: projectorPowerUUID
+                )
             }
             isConfigured = true
             catalogReady = true
@@ -129,6 +142,17 @@ final class AppModel: ObservableObject {
     func webYouTubeVideos() async throws -> [ZorgYouTubeVideo] {
         guard let youtubeClient else { throw CinemaError.youtubeUnavailable }
         return try await youtubeClient.videos()
+    }
+
+    func webControlStatus() -> WebControlStatus {
+        WebControlStatus(projectorPowerConfigured: loxoneClient != nil)
+    }
+
+    func setProjectorPower(on: Bool) async throws -> LoxoneCommandResult {
+        guard let loxoneClient else { throw CinemaError.loxoneUnavailable }
+        let result = try await loxoneClient.setProjectorPower(on: on)
+        SilverLog.info("Loxone Projector Power command=\(result.command) accepted value=\(result.value ?? "unknown")")
+        return result
     }
 
     func playYouTube(videoID: String) async throws {
@@ -599,6 +623,7 @@ enum CinemaError: LocalizedError {
     case invalidSubtitle
     case catalogUnavailable
     case youtubeUnavailable
+    case loxoneUnavailable
     var errorDescription: String? {
         switch self {
         case .incompatible: "This item is not AV1 + FLAC + SRT in a supported direct-play container."
@@ -607,6 +632,7 @@ enum CinemaError: LocalizedError {
         case .invalidSubtitle: "The selected SRT subtitle track is unavailable."
         case .catalogUnavailable: "The Jellyfin catalogue is not ready yet."
         case .youtubeUnavailable: "The Zorg YouTube catalogue or selected video is unavailable."
+        case .loxoneUnavailable: "Loxone Projector Power control is unavailable."
         }
     }
 }
@@ -669,6 +695,10 @@ struct WebSubtitleTrack: Encodable, Sendable {
 struct WebPlaybackStatus: Encodable, Sendable {
     let currentOutput: WebDisplayOutput?
     let nowPlaying: WebNowPlaying?
+}
+
+struct WebControlStatus: Encodable, Sendable {
+    let projectorPowerConfigured: Bool
 }
 
 struct WebDisplayOutput: Encodable, Sendable {

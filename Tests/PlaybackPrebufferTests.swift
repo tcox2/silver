@@ -77,6 +77,18 @@ enum PlaybackPrebufferTests {
             ) == 24,
             "declared frame rate should remain the fallback before mpv reports decoding"
         )
+        let loxoneServer = URL(string: "https://loxone.example")!
+        check(
+            LoxoneClient.commandURL(
+                server: loxoneServer,
+                uuid: "projector-uuid",
+                command: "on"
+            ).absoluteString == "https://loxone.example/jdev/sps/io/projector-uuid/on",
+            "projector commands should target the configured switch only"
+        )
+        let response = Data(#"{"LL":{"control":"dev/sps/io/projector-uuid/on","value":"1","Code":"200"}}"#.utf8)
+        let parsed = try! LoxoneClient.parseCommandResponse(response, command: "on")
+        check(parsed.command == "on" && parsed.value == "1", "successful Loxone responses should be accepted")
         print("Playback prebuffer tests passed")
     }
 
