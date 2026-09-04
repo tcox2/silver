@@ -13,5 +13,7 @@
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Silver connects to the home Loxone Miniserver to control the projector and Lounge amplifier.</string>
 </dict>
 </plist>

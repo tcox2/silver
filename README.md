@@ -113,6 +113,9 @@ credentials only in its TLS-protected request. Keep the configuration mode
 `0600`; a dedicated Loxone user restricted to these controls is preferable to an
 administrator account.
 
+On first use, macOS may ask whether Silver can access devices on the local
+network. Allow this access so Silver can reach the Loxone Miniserver.
+
 Then run:
 
 ```sh
