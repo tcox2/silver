@@ -5,6 +5,7 @@ struct LoxoneClient: Sendable {
     private let authorization: String
     private let projectorPowerUUID: String
     private let amplifierVolumeUUID: String?
+    private let session: URLSession
 
     init(
         server: String,
@@ -22,6 +23,11 @@ struct LoxoneClient: Sendable {
         authorization = "Basic " + Data("\(username):\(password)".utf8).base64EncodedString()
         self.projectorPowerUUID = projectorPowerUUID
         self.amplifierVolumeUUID = amplifierVolumeUUID
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.waitsForConnectivity = true
+        sessionConfiguration.timeoutIntervalForRequest = 15
+        sessionConfiguration.timeoutIntervalForResource = 30
+        session = URLSession(configuration: sessionConfiguration)
     }
 
     var hasAmplifierVolume: Bool { amplifierVolumeUUID?.isEmpty == false }
@@ -62,7 +68,7 @@ struct LoxoneClient: Sendable {
         request.httpMethod = "GET"
         request.setValue(authorization, forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
             throw LoxoneError.http((response as? HTTPURLResponse)?.statusCode ?? 0)
         }
