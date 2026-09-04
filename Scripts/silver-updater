@@ -56,10 +56,29 @@ is_playing() {
 }
 
 wait_until_healthy() {
-  local attempt
-  for attempt in {1..20}; do
-    curl --silent --fail --max-time 2 http://127.0.0.1:8099/api/status >/dev/null 2>&1 && return 0
+  local attempt consecutive=0
+  # Silver can briefly expose its API before macOS finishes granting the
+  # exclusive full-screen display. Require ten consecutive healthy seconds so
+  # that a transient startup is never mistaken for a successful deployment.
+  for attempt in {1..30}; do
+    if is_silver_running \
+        && curl --silent --fail --max-time 2 http://127.0.0.1:8099/api/status >/dev/null 2>&1; then
+      (( consecutive += 1 ))
+      (( consecutive >= 10 )) && return 0
+    else
+      consecutive=0
+    fi
     sleep 1
+  done
+  return 1
+}
+
+restart_and_wait_until_healthy() {
+  local attempt
+  for attempt in 1 2; do
+    launchctl kickstart -k "gui/$UID/org.tcox.silver" >/dev/null 2>&1 || true
+    wait_until_healthy && return 0
+    log "Silver startup attempt $attempt did not remain healthy"
   done
   return 1
 }
@@ -159,12 +178,11 @@ print("\t".join(values))
     rm -f -- "$archive"
     return
   fi
-  launchctl kickstart -k "gui/$UID/org.tcox.silver" >/dev/null 2>&1 || true
-  if ! wait_until_healthy; then
+  if ! restart_and_wait_until_healthy; then
     log "Release $commit did not become healthy; rolling back"
     mv "$app" "$failed"
     mv "$previous" "$app"
-    launchctl kickstart -k "gui/$UID/org.tcox.silver" >/dev/null 2>&1 || true
+    restart_and_wait_until_healthy || log "Rollback app did not become healthy"
     rm -rf -- "$staging"
     rm -f -- "$archive"
     return

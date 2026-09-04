@@ -109,6 +109,6 @@ jobs:
           "$nats" "${args[@]}" object put SILVER_ARTIFACTS Silver-macos-arm64.zip \
             --name "$object" --description "Silver $GITHUB_SHA" \
             --chunk-size 1048576 --force --no-progress
-          descriptor="$(printf '{\"commit\":\"%s\",\"object\":\"%s\",\"sha256\":\"%s\"}' \
+          descriptor="$(printf '{"commit":"%s","object":"%s","sha256":"%s"}' \
             "$GITHUB_SHA" "$object" "$digest")"
           "$nats" "${args[@]}" kv put SILVER_RELEASES current "$descriptor"
