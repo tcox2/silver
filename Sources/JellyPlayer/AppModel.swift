@@ -458,6 +458,17 @@ final class AppModel: ObservableObject {
         let duration = rawDuration.isFinite && rawDuration > 0 ? rawDuration : nil
         let audio = source.mediaStreams.filter { $0.type == "Audio" }.map(\.codec).joined(separator: ", ").uppercased()
         let state = isPrebuffering ? "prebuffering" : (mpv.string("pause") == "yes" ? "paused" : "playing")
+        let declaredSourceFPS = video?.averageFrameRate
+        let decodedSourceFPS = mpv.number("estimated-vf-fps")
+        let expectedCorrection = declaredSourceFPS.flatMap { declaredFPS in
+            currentOutput.map { output in
+                DisplaySynchronization.expectedCorrection(
+                    declaredFrameRate: declaredFPS,
+                    decodedFrameRate: decodedSourceFPS,
+                    outputRefreshRate: output.refreshRate
+                )
+            }
+        }
         return WebPlaybackStatus(currentOutput: currentOutput, nowPlaying: WebNowPlaying(
             id: item.id,
             title: item.name,
@@ -473,7 +484,11 @@ final class AppModel: ObservableObject {
             videoCodec: video?.codec.uppercased() ?? "AV1",
             audioCodec: audio.isEmpty ? "None" : audio,
             subtitles: playingSubtitleLabel,
-            outputMode: activeOutputLabel ?? "Unknown"
+            outputMode: activeOutputLabel ?? "Unknown",
+            declaredSourceFPS: declaredSourceFPS,
+            decodedSourceFPS: decodedSourceFPS,
+            expectedCorrection: expectedCorrection,
+            actualCorrection: mpv.number("video-speed-correction")
         ))
     }
 
@@ -700,4 +715,8 @@ struct WebNowPlaying: Encodable, Sendable {
     let audioCodec: String
     let subtitles: String
     let outputMode: String
+    let declaredSourceFPS: Double?
+    let decodedSourceFPS: Double?
+    let expectedCorrection: Double?
+    let actualCorrection: Double?
 }

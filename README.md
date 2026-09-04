@@ -58,7 +58,9 @@ even if added to `config.json`.
 The post-start synchronization check derives its expected speed correction from
 mpv's decoded frame rate rather than rounded catalogue metadata. Thus 24000/1001
 material reported as 24 fps correctly expects the approximately 1.001x correction
-needed by a nominal 24 Hz HDMI mode.
+needed by a nominal 24 Hz HDMI mode. While media is playing, the Status tab shows
+the declared and decoded source frame rates alongside the expected and actual
+mpv speed corrections, each at nine-decimal precision.
 
 ## Build
 
